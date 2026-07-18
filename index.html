@@ -62,22 +62,12 @@
     "a1plususer2@a1plus.com": "Accounting",
   };
 
-  /* ---- Built-in login (no database needed) ----
-     If you are NOT using Supabase above, these accounts provide a working
-     login/logout right away. A default admin is included below.
-     IMPORTANT: change the default password, and note that because this runs
-     in the browser, these passwords are visible in the page source — fine for
-     a basic internal gate, but for real security use the Supabase login above.
-     Roles: Administrator, Finance Manager, Accounting, Cashier,
-            Department Head, Requestor. */
-  window.PCP_LOCAL_USERS = [
-    { user: "super admin",      password: "super admin",      role: "Administrator" },
-    { user: "requestor",        password: "requestor",        role: "Requestor" },
-    { user: "department head",  password: "department head",  role: "Department Head" },
-    { user: "cashier",          password: "cashier",          role: "Cashier" },
-    { user: "accounting",       password: "accounting",       role: "Accounting" },
-    { user: "finance manager",  password: "finance manager",  role: "Finance Manager" },
-  ];
+  /* ---- Built-in login (fallback only) ----
+     Not used while Supabase is configured above — login/logout is handled by
+     Supabase email accounts. Kept empty on purpose so no passwords live in the
+     source. (If you ever clear the Supabase keys, add accounts here to restore
+     an offline username/password login.) */
+  window.PCP_LOCAL_USERS = [];
 
   /* Storage adapter: Supabase (shared) when configured, else localStorage.
      window.storage is defined synchronously so the app can call it
@@ -162,6 +152,6 @@
 
 <!-- The portal itself, transpiled in the browser by Babel.
      Bump the ?v= number whenever you deploy a change so browsers reload it. -->
-<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx?v=20260718d"></script>
+<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx?v=20260718e"></script>
 </body>
 </html>
