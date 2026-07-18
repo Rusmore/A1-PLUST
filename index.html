@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Petty Cash Portal</title>
+<title>Petty Cash Management System</title>
 <style>html,body{margin:0;padding:0;height:100%;background:#F6F4EF;}#root{min-height:100vh;}</style>
 
 <!-- In-browser React transpiler (no build step needed) -->
@@ -27,21 +27,120 @@
 <body>
 <div id="root"></div>
 
-<!-- Simple storage layer backed by this browser's localStorage.
-     The app calls window.storage.get(key)/set(key, value). -->
+<!-- ============================================================
+     DATA STORAGE + LOGIN
+     By default the app stores data in THIS browser only (localStorage),
+     with no login. To share ONE secured database across all devices/users
+     for free (works on GitHub Pages — no server needed):
+       1. Create a free project at https://supabase.com
+       2. In the Supabase SQL editor, run the SQL shown in chat / the README
+          (creates the pcp_state table + authenticated-only RLS policies).
+       3. In Authentication > Providers, turn OFF "Allow new users to sign up"
+          (so only you can add accounts), then add your ~10 users under
+          Authentication > Users > Add user (email + password).
+       4. In Project Settings > API, copy the Project URL and the
+          "anon public" key, and paste them below.
+     When these are filled in, the app shows a login screen and only
+     signed-in users can read/write. The anon key is safe to commit
+     (it is protected by Row Level Security). Leave blank for local mode.
+     ============================================================ -->
 <script>
-  window.storage = {
-    get: function (key) {
-      try {
-        var v = localStorage.getItem(key);
-        return Promise.resolve(v == null ? null : { value: v });
-      } catch (e) { return Promise.resolve(null); }
-    },
-    set: function (key, value) {
-      try { localStorage.setItem(key, value); } catch (e) {}
-      return Promise.resolve(true);
-    }
+  window.PCP_SUPABASE_URL = "";      // e.g. "https://abcdefgh.supabase.co"
+  window.PCP_SUPABASE_ANON_KEY = ""; // e.g. "eyJhbGciOiJI..."
+  window.PCP_TABLE = "pcp_state";
+
+  /* ---- Access control ----
+     Admin accounts get FULL "super" access (every tab) and can view the
+     system as any role. Everyone else is locked to a restricted role and
+     cannot switch. Match by full email or by the username part before "@",
+     case-insensitive. Create these same accounts in Supabase > Authentication. */
+  window.PCP_ADMIN_EMAILS = ["a1plus"];   // e.g. ["a1plus", "admin@a1plus.com"]
+  window.PCP_DEFAULT_ROLE = "Requestor";  // role for any signed-in user not listed below
+  window.PCP_USER_ROLES = {               // optional: pin specific users to a role
+    // "cashier@a1plus.com": "Cashier",
+    // "grace@a1plus.com": "Finance Manager",
+    // "accounting@a1plus.com": "Accounting",
   };
+
+  /* Storage adapter: Supabase (shared) when configured, else localStorage.
+     window.storage is defined synchronously so the app can call it
+     immediately; cloud calls await the client via the sbReady promise. */
+  (function () {
+    var TABLE = window.PCP_TABLE || "pcp_state";
+
+    var local = {
+      get: function (k) {
+        try { var v = localStorage.getItem(k); return v == null ? null : { value: v }; }
+        catch (e) { return null; }
+      },
+      set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    };
+
+    // Resolves to a Supabase client, or null when not configured / on failure.
+    var sbReady = (function () {
+      var url = window.PCP_SUPABASE_URL, key = window.PCP_SUPABASE_ANON_KEY;
+      if (!url || !key) return Promise.resolve(null);
+      return import("https://esm.sh/@supabase/supabase-js@2")
+        .then(function (m) { return m.createClient(url, key, { auth: { persistSession: true, autoRefreshToken: true } }); })
+        .catch(function (e) { console.warn("Supabase init failed — using local storage:", e); return null; });
+    })();
+
+    // Auth surface for the React app. When enabled, the app requires sign-in
+    // and every DB request carries the signed-in user's token (enforced by the
+    // table's Row Level Security policies). Uses the SAME client as storage.
+    window.PCP_AUTH = {
+      enabled: !!(window.PCP_SUPABASE_URL && window.PCP_SUPABASE_ANON_KEY),
+      ready: sbReady,
+      getUser: function () {
+        return sbReady.then(function (c) { return c ? c.auth.getUser().then(function (r) { return r.data ? r.data.user : null; }) : null; });
+      },
+      signIn: function (email, password) {
+        return sbReady.then(function (c) {
+          if (!c) return { error: { message: "Cloud database not configured." } };
+          return c.auth.signInWithPassword({ email: email, password: password });
+        });
+      },
+      resetPassword: function (email) {
+        return sbReady.then(function (c) {
+          if (!c) return { error: { message: "Cloud database not configured." } };
+          return c.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
+        });
+      },
+      signOut: function () { return sbReady.then(function (c) { return c ? c.auth.signOut() : null; }); },
+      onChange: function (cb) { sbReady.then(function (c) { if (c) c.auth.onAuthStateChange(function (_e, session) { cb(session); }); }); }
+    };
+
+    // Debounced writes so rapid state changes don't hammer the free tier.
+    var timer = null, pending = null, client = null;
+    sbReady.then(function (c) { client = c; if (c) console.info("Petty Cash: connected to shared Supabase database."); });
+    function flush() {
+      if (!client || pending == null) return;
+      var p = pending; pending = null;
+      client.from(TABLE).upsert({ key: p.key, value: p.value, updated_at: new Date().toISOString() })
+        .then(function (r) { if (r.error) console.warn("Cloud save failed:", r.error.message); });
+    }
+
+    window.storage = {
+      get: function (key) {
+        return sbReady.then(function (c) {
+          if (!c) return local.get(key);
+          return c.from(TABLE).select("value").eq("key", key).maybeSingle()
+            .then(function (res) {
+              if (!res.error && res.data && res.data.value != null) { local.set(key, res.data.value); return { value: res.data.value }; }
+              return local.get(key); // nothing in cloud yet → seed from local
+            })
+            .catch(function () { return local.get(key); });
+        });
+      },
+      set: function (key, value) {
+        local.set(key, value); // instant local cache / offline copy
+        return sbReady.then(function (c) {
+          if (c) { pending = { key: key, value: value }; clearTimeout(timer); timer = setTimeout(flush, 800); }
+          return true;
+        });
+      }
+    };
+  })();
 </script>
 
 <!-- The portal itself, transpiled in the browser by Babel -->

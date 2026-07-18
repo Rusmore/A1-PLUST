@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useContext, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import {
   LayoutDashboard, FileText, Wallet, Receipt, Database, Plus, Download,
   Check, X, Search, AlertTriangle, TrendingUp, Users, Building2, Trash2,
   Edit3, ChevronRight, Banknote, ClipboardList, PiggyBank, CircleDollarSign,
   ArrowUpRight, ArrowDownRight, FileSpreadsheet, RefreshCw, Filter as FilterIcon,
-  Printer
+  Printer, Bell, History, ShieldCheck, ArrowLeftRight, Clock, UserCog, Landmark, LogOut
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -97,6 +97,23 @@ const seedLiquidations = () => ([
   },
 ]);
 
+const seedReplenishments = () => ([
+  {
+    id: "rep-1001", replenishmentNo: "PCRP-2026-0001", date: "2026-07-12",
+    branchCode: "WARNER", amount: 4200, preparedBy: "Angelita Bayani",
+    approvedBy: "Grace", checkNo: "CHK-88213", method: "Check",
+    status: "Completed", remarks: "Reimburse liquidated Warner expenses",
+  },
+]);
+
+const seedAuditLog = () => ([
+  { id: "aud-1", ts: "2026-07-08T09:12:00", user: "Requestor", action: "Request Created", entity: "PCR-2026-0001", remarks: "Field sales trip advance ₱5,000.00" },
+  { id: "aud-2", ts: "2026-07-08T10:05:00", user: "Department Head", action: "Approved", entity: "PCR-2026-0001", remarks: "All 4 levels approved" },
+  { id: "aud-3", ts: "2026-07-09T08:30:00", user: "Cashier", action: "Released", entity: "PCV-2026-0001", remarks: "Cash released to Juan Dela Cruz" },
+  { id: "aud-4", ts: "2026-07-10T14:20:00", user: "Accounting", action: "Liquidated", entity: "PCV-2026-0001", remarks: "4 receipts itemized" },
+  { id: "aud-5", ts: "2026-07-12T11:00:00", user: "Finance Manager", action: "Replenished", entity: "PCRP-2026-0001", remarks: "Check CHK-88213 · ₱4,200.00" },
+]);
+
 const STORAGE_KEY = "petty-cash-portal-state";
 
 async function loadState() {
@@ -133,10 +150,14 @@ function liqStatusFor(disb, liquidations) {
   return "Over-Liquidated";
 }
 
-function computeMetrics(funds, requests, disbursements, liquidations) {
+function computeMetrics(funds, requests, disbursements, liquidations, replenishments) {
+  const reps = replenishments || [];
   const totalFund = funds.reduce((s, f) => s + (Number(f.beginningBalance) || 0), 0);
   const totalDisbursed = disbursements.reduce((s, d) => s + (Number(d.amount) || 0), 0);
   const totalLiquidated = liquidations.reduce((s, l) => s + liquidatedTotal(l), 0);
+  const totalReplenished = reps
+    .filter((r) => r.status === "Completed")
+    .reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
   let outstanding = 0;
   const activeEmployees = new Set();
@@ -149,21 +170,29 @@ function computeMetrics(funds, requests, disbursements, liquidations) {
     }
   });
 
-  const availableBalance = totalFund - totalLiquidated - outstanding;
+  const availableBalance = totalFund - totalLiquidated - outstanding + totalReplenished;
   const pendingRequests = requests.filter((r) => r.status === "Pending").length;
+  const approvedRequests = requests.filter((r) => r.status === "Approved").length;
   const pendingLiquidationCount = disbursements.filter((d) => liqStatusFor(d, liquidations) !== "Fully Liquidated").length;
+  const pendingReplenishments = reps.filter((r) => r.status !== "Completed").length;
   const completedBilled = disbursements.filter((d) => d.billed).length;
 
+  const nowMonth = todayISO().slice(0, 7);
+  const monthlyExpenses = liquidations.reduce((s, l) =>
+    s + l.lines.reduce((ls, ln) => ls + ((ln.date || "").slice(0, 7) === nowMonth ? (Number(ln.amount) || 0) : 0), 0), 0);
+
   return {
-    totalFund, totalDisbursed, totalLiquidated, outstanding, availableBalance,
-    pendingRequests, pendingLiquidationCount, completedBilled,
+    totalFund, totalDisbursed, totalLiquidated, totalReplenished, outstanding, availableBalance,
+    pendingRequests, approvedRequests, pendingLiquidationCount, pendingReplenishments,
+    monthlyExpenses, completedBilled,
     activeEmployeeCount: activeEmployees.size,
   };
 }
 
 /* Per-fund PCF monitoring — disbursed, liquidated, outstanding and available
    balance scoped to one fund's branch. Mirrors computeMetrics' logic. */
-function monitoringForFund(fund, disbursements, liquidations) {
+function monitoringForFund(fund, disbursements, liquidations, replenishments) {
+  const reps = replenishments || [];
   const disb = disbursements.filter((d) => d.branchCode === fund.branchCode);
   let disbursed = 0, liquidated = 0, outstanding = 0;
   disb.forEach((d) => {
@@ -174,9 +203,12 @@ function monitoringForFund(fund, disbursements, liquidations) {
       outstanding += Math.max(0, (Number(d.amount) || 0) - already);
     }
   });
+  const replenished = reps
+    .filter((r) => r.branchCode === fund.branchCode && r.status === "Completed")
+    .reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const beginning = Number(fund.beginningBalance) || 0;
-  const available = beginning - liquidated - outstanding;
-  return { beginning, disbursed, liquidated, outstanding, available };
+  const available = beginning - liquidated - outstanding + replenished;
+  return { beginning, disbursed, liquidated, outstanding, replenished, available };
 }
 
 function downloadWorkbook(wb, filename) {
@@ -1008,6 +1040,58 @@ function approvedCount(approvals) {
   return APPROVAL_LEVELS.filter((lvl) => ap[lvl].status === "Approved").length;
 }
 
+/* ============================= USER ROLES ============================= */
+
+/* Each role only sees the nav tabs relevant to it. Administrator sees everything. */
+const ROLES = {
+  "Administrator":     { label: "Administrator",     tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata"] },
+  "Requestor":         { label: "Requestor",         tabs: ["dashboard", "requests", "history"] },
+  "Department Head":   { label: "Department Head",   tabs: ["dashboard", "requests", "history", "report"] },
+  "Cashier":           { label: "Cashier",           tabs: ["dashboard", "requests", "disbursements", "liquidation", "history"] },
+  "Accounting":        { label: "Accounting",        tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata"] },
+  "Finance Manager":   { label: "Finance Manager",   tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit"] },
+};
+const ROLE_NAMES = Object.keys(ROLES);
+
+/* Decide a signed-in user's role and admin status from the config in index.html.
+   Admins get full super access and can view-as any role; everyone else is
+   locked to a single restricted role. In local (no-auth) mode, the operator
+   is treated as an admin so the tool stays fully usable offline. */
+function resolveUserAccess(email) {
+  if (!email) return { role: "Administrator", isAdmin: true }; // local / no-auth mode
+  const admins = (window.PCP_ADMIN_EMAILS || []).map((s) => String(s).toLowerCase());
+  const map = window.PCP_USER_ROLES || {};
+  const fallback = (window.PCP_DEFAULT_ROLE && ROLES[window.PCP_DEFAULT_ROLE]) ? window.PCP_DEFAULT_ROLE : "Requestor";
+  const e = String(email).toLowerCase();
+  const username = e.split("@")[0];
+  if (admins.includes(e) || admins.includes(username)) return { role: "Administrator", isAdmin: true };
+  const mapped = map[e] || map[username];
+  return { role: (mapped && ROLES[mapped]) ? mapped : fallback, isAdmin: false };
+}
+
+/* Build the notification feed derived from current state — approvals awaiting
+   action, overdue/pending liquidations, and completed replenishments. */
+function buildNotifications(requests, disbursements, liquidations, replenishments) {
+  const out = [];
+  requests.forEach((r) => {
+    if (r.status === "Pending") out.push({ id: "n-req-" + r.id, type: "approval", icon: "clip", title: "Approval required", text: `${r.requestNo} · ${r.employee} · ${peso(r.amount)}`, date: r.date });
+    if (r.status === "Approved") out.push({ id: "n-appr-" + r.id, type: "approved", icon: "check", title: "Request approved — ready to release", text: `${r.requestNo} · ${r.employee}`, date: r.date });
+    if (r.status === "Rejected") out.push({ id: "n-rej-" + r.id, type: "rejected", icon: "x", title: "Request rejected", text: `${r.requestNo} · ${r.employee}`, date: r.date });
+  });
+  disbursements.forEach((d) => {
+    const status = liqStatusFor(d, liquidations);
+    if (status === "Fully Liquidated") return;
+    const ageDays = Math.floor((Date.now() - new Date((d.date || todayISO()) + "T00:00:00").getTime()) / 86400000);
+    if (ageDays >= 15) out.push({ id: "n-over-" + d.id, type: "overdue", icon: "alert", title: "Liquidation overdue", text: `${d.voucherNo} · ${d.employee} · ${ageDays} days outstanding`, date: d.date });
+    else out.push({ id: "n-liq-" + d.id, type: "liquidation", icon: "sheet", title: "Liquidation due", text: `${d.voucherNo} · ${d.employee} · ${peso(d.amount)}`, date: d.date });
+  });
+  (replenishments || []).forEach((r) => {
+    if (r.status === "Completed") out.push({ id: "n-rep-" + r.id, type: "replenished", icon: "refresh", title: "Replenishment completed", text: `${r.replenishmentNo} · ${peso(r.amount)}`, date: r.date });
+    else out.push({ id: "n-repp-" + r.id, type: "replenish-pending", icon: "refresh", title: "Replenishment pending", text: `${r.replenishmentNo} · ${peso(r.amount)}`, date: r.date });
+  });
+  return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+
 const EXPENSE_CATEGORIES = [
   "DL 13th month pay",
   "DL Contracted Support Services",
@@ -1469,6 +1553,56 @@ const CSS = `
   .pcp-appr-row:last-child { border-bottom: none; }
   .pcp-appr-level { font-weight: 700; font-size: 12.5px; }
 
+  /* ---- Notifications & role ---- */
+  .pcp-notif-dot {
+    position: absolute; top: 1px; right: 1px; min-width: 15px; height: 15px; padding: 0 3px;
+    background: var(--brand); color: #fff; border-radius: 99px; font-size: 9px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; line-height: 1;
+  }
+  .pcp-notif-panel {
+    position: absolute; right: 0; top: calc(100% + 8px); width: 340px; background: #fff;
+    border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 44px rgba(0,0,0,0.18);
+    z-index: 60; overflow: hidden;
+  }
+  .pcp-notif-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+  .pcp-notif-list { max-height: 400px; overflow-y: auto; }
+  .pcp-notif-item { display: flex; gap: 10px; padding: 11px 16px; border-bottom: 1px solid #f0f1f4; cursor: pointer; }
+  .pcp-notif-item:hover { background: #fafbfd; }
+  .pcp-notif-item:last-child { border-bottom: none; }
+  .pcp-notif-ic { width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .pcp-role-select { width: auto; min-width: 150px; font-weight: 600; }
+  .pcp-role-pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 7px;
+    background: var(--blue-bg); color: var(--blue); font-size: 12px; font-weight: 700; white-space: nowrap;
+  }
+  .pcp-role-badge {
+    display: flex; align-items: center; gap: 6px; padding: 7px 10px; margin: 0 6px 10px 6px;
+    background: rgba(255,255,255,0.06); border-radius: 8px; color: #cfd3e0; font-size: 11.5px; font-weight: 600;
+  }
+  .pcp-user-row {
+    display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 10px; margin: 0 6px 10px 6px;
+    background: rgba(255,255,255,0.04); border-radius: 8px;
+  }
+  .pcp-user-email { flex: 1; min-width: 0; color: #9098b3; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pcp-kpi-click { cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s; }
+  .pcp-kpi-click:hover { border-color: var(--brand); box-shadow: 0 4px 14px rgba(200,16,46,0.10); }
+
+  /* ---- Login ---- */
+  .pcp-login-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; min-height: 100vh; }
+  .pcp-login-card {
+    width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: 0 18px 50px rgba(15,18,30,0.12); overflow: hidden;
+  }
+  .pcp-login-head { background: var(--ink); color: #fff; padding: 22px 24px; }
+  .pcp-login-head .pcp-brand-mark { margin-bottom: 12px; }
+  .pcp-login-title { font-size: 16px; font-weight: 700; }
+  .pcp-login-sub { font-size: 11.5px; color: #9098b3; margin-top: 3px; }
+  .pcp-login-body { padding: 22px 24px; }
+  .pcp-login-err { background: var(--red-bg); color: var(--brand); font-size: 12px; padding: 9px 12px; border-radius: 8px; margin-bottom: 12px; }
+  .pcp-login-ok { background: var(--green-bg); color: var(--green); font-size: 12px; padding: 9px 12px; border-radius: 8px; margin-bottom: 12px; }
+  .pcp-login-foot { font-size: 11px; color: var(--text-mut); text-align: center; margin-top: 14px; }
+  .pcp-link-btn { background: none; border: none; color: var(--brand); font-size: 11.5px; cursor: pointer; padding: 0; font-weight: 600; }
+
   /* ---- Report ---- */
   .pcp-report-head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
   .pcp-report-head img { max-height: 46px; max-width: 130px; object-fit: contain; }
@@ -1497,24 +1631,28 @@ const CSS = `
 const NAV_ITEMS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "requests", label: "Petty Cash Requests", icon: ClipboardList },
-  { key: "disbursements", label: "Disbursement Ledger", icon: Receipt },
+  { key: "disbursements", label: "Release Ledger", icon: Receipt },
   { key: "liquidation", label: "Liquidation", icon: FileSpreadsheet },
-  { key: "report", label: "Management Report", icon: FileText },
+  { key: "replenishment", label: "Replenishment", icon: RefreshCw },
+  { key: "history", label: "Transaction History", icon: History },
+  { key: "report", label: "Reports", icon: FileText },
+  { key: "audit", label: "Audit Trail", icon: ShieldCheck },
   { key: "masterdata", label: "Funds & Master Data", icon: Database },
 ];
 
-function Sidebar({ tab, setTab }) {
+function Sidebar({ tab, setTab, role, navItems, userEmail, onSignOut }) {
+  const items = navItems || NAV_ITEMS;
   return (
     <aside className="pcp-sidebar">
       <div className="pcp-brand-row">
         <div className="pcp-brand-mark"><Wallet size={18} /></div>
         <div>
-          <div className="pcp-brand-title">Petty Cash Portal</div>
+          <div className="pcp-brand-title">Petty Cash System</div>
           <div className="pcp-brand-sub">Imprest Fund System</div>
         </div>
       </div>
       <nav className="pcp-nav">
-        {NAV_ITEMS.map((item) => {
+        {items.map((item) => {
           const Icon = item.icon;
           return (
             <button
@@ -1529,6 +1667,19 @@ function Sidebar({ tab, setTab }) {
         })}
       </nav>
       <div className="pcp-sidebar-foot">
+        {role && (
+          <div className="pcp-role-badge" title="Signed-in role">
+            <UserCog size={13} /> <span>{role}</span>
+          </div>
+        )}
+        {userEmail && (
+          <div className="pcp-user-row">
+            <span className="pcp-user-email" title={userEmail}>{userEmail}</span>
+            <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" style={{ color: "#cfd3e0" }} onClick={onSignOut} title="Sign out">
+              <LogOut size={13} />
+            </button>
+          </div>
+        )}
         <div className="pcp-logos-strip">
           <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
           <img src={LOGO_SPI} alt="Starkson Paper and Plastic Corporation" />
@@ -1541,6 +1692,77 @@ function Sidebar({ tab, setTab }) {
   );
 }
 
+/* Shared UI context so every tab's TopBar can render the global notification
+   bell and role switcher without threading props through each component. */
+const AppUI = React.createContext(null);
+
+const NOTIF_ICON = { clip: ClipboardList, check: Check, x: X, alert: AlertTriangle, sheet: FileSpreadsheet, refresh: RefreshCw };
+
+function NotificationBell() {
+  const ui = useContext(AppUI);
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+  if (!ui) return null;
+  const notes = ui.notifications || [];
+  const count = notes.length;
+  return (
+    <div style={{ position: "relative" }} ref={ref}>
+      <button className="pcp-btn pcp-btn-ghost" style={{ position: "relative", padding: "8px 10px" }} onClick={() => setOpen((o) => !o)} title="Notifications">
+        <Bell size={16} />
+        {count > 0 && <span className="pcp-notif-dot">{count > 9 ? "9+" : count}</span>}
+      </button>
+      {open && (
+        <div className="pcp-notif-panel">
+          <div className="pcp-notif-head">
+            <strong>Notifications</strong>
+            <span style={{ fontSize: 11, color: "var(--text-mut)" }}>{count} active</span>
+          </div>
+          <div className="pcp-notif-list">
+            {notes.length ? notes.map((n) => {
+              const Icon = NOTIF_ICON[n.icon] || Bell;
+              const tint = n.type === "overdue" || n.type === "rejected" ? "var(--brand)"
+                : n.type === "approved" || n.type === "replenished" ? "var(--green)"
+                : n.type === "approval" ? "var(--amber)" : "var(--blue)";
+              return (
+                <div key={n.id} className="pcp-notif-item" onClick={() => { if (ui.onNotifClick) ui.onNotifClick(n); setOpen(false); }}>
+                  <div className="pcp-notif-ic" style={{ background: tint + "18", color: tint }}><Icon size={14} /></div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{n.title}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-mut)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{n.text}</div>
+                    <div style={{ fontSize: 10, color: "#9098b3" }}>{fmtDate(n.date)}</div>
+                  </div>
+                </div>
+              );
+            }) : <div className="pcp-empty" style={{ padding: 24 }}>You're all caught up</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RoleSelector() {
+  const ui = useContext(AppUI);
+  if (!ui) return null;
+  if (!ui.canSwitchRole) {
+    return (
+      <span className="pcp-role-pill" title="Your access level (set by your administrator)">
+        <ShieldCheck size={13} /> {ui.role}
+      </span>
+    );
+  }
+  return (
+    <select className="pcp-select pcp-role-select" value={ui.role} onChange={(e) => ui.setRole(e.target.value)} title="Super admin — view the system as any role">
+      {ROLE_NAMES.map((r) => <option key={r} value={r}>{r === "Administrator" ? "Administrator (super)" : "View as: " + r}</option>)}
+    </select>
+  );
+}
+
 function TopBar({ title, sub, right }) {
   return (
     <div className="pcp-topbar">
@@ -1548,7 +1770,11 @@ function TopBar({ title, sub, right }) {
         <h1>{title}</h1>
         {sub && <div className="pcp-topbar-sub">{sub}</div>}
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>{right}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {right}
+        <NotificationBell />
+        <RoleSelector />
+      </div>
     </div>
   );
 }
@@ -1559,6 +1785,7 @@ function Badge({ status }) {
     Open: "blue", Closed: "gray",
     "Not Liquidated": "amber", "Partially Liquidated": "blue",
     "Fully Liquidated": "green", "Over-Liquidated": "red",
+    Draft: "gray", Submitted: "amber", Verified: "blue", Completed: "green", Released: "green",
   };
   const cls = map[status] || "gray";
   return <span className={`pcp-badge pcp-badge-${cls}`}>{status}</span>;
@@ -1567,9 +1794,9 @@ function Badge({ status }) {
 
 const CHART_COLORS = ["#c8102e", "#2054a3", "#b9790a", "#15803d", "#7c3aed", "#0891b2", "#be185d", "#4b5563"];
 
-function KpiCard({ label, value, icon: Icon, tint, foot }) {
+function KpiCard({ label, value, icon: Icon, tint, foot, onClick }) {
   return (
-    <div className="pcp-kpi">
+    <div className={"pcp-kpi" + (onClick ? " pcp-kpi-click" : "")} onClick={onClick}>
       <div className="pcp-kpi-icon" style={{ background: tint + "22", color: tint }}>
         <Icon size={16} />
       </div>
@@ -1619,8 +1846,8 @@ const DASHBOARD_BRANCHES = [
   { key: "DISNEY", label: "Disney", branchCode: "D1" },
 ];
 
-function Dashboard({ funds, requests, disbursements, liquidations }) {
-  const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations), [funds, requests, disbursements, liquidations]);
+function Dashboard({ funds, requests, disbursements, liquidations, replenishments, onNavigate }) {
+  const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations, replenishments), [funds, requests, disbursements, liquidations, replenishments]);
 
   const byBranch = useMemo(() => groupSum(disbursements, (d) => d.branchCode, (d) => d.amount), [disbursements]);
   const byCompany = useMemo(() => groupSum(disbursements, (d) => companyOfBranch(d.branchCode), (d) => d.amount), [disbursements]);
@@ -1686,17 +1913,17 @@ function Dashboard({ funds, requests, disbursements, liquidations }) {
       </div>
 
       <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-        <KpiCard label="Active Petty Cash Funds" value={funds.length + " Funds"} icon={PiggyBank} tint="#c8102e" foot="Across all plants" />
-        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" />
-        <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" />
-        <KpiCard label="Total Liquidated" value={peso(m.totalLiquidated)} icon={ArrowDownRight} tint="#15803d" />
-        <KpiCard label="Available Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
+        <KpiCard label="Current Petty Cash Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
           tint={m.availableBalance < 0 ? "#c8102e" : "#15803d"}
           foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand across custodians"} />
-        <KpiCard label="Completed & Billed" value={m.completedBilled} icon={Check} tint="#15803d" foot="Exported to Acumatica" />
-        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" />
-        <KpiCard label="Pending Liquidation" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" />
-        <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#7c3aed" />
+        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
+        <KpiCard label="Approved Requests" value={m.approvedRequests} icon={Check} tint="#2054a3" foot="Ready for release" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
+        <KpiCard label="Pending Liquidations" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
+        <KpiCard label="Pending Replenishments" value={m.pendingReplenishments} icon={RefreshCw} tint="#b9790a" foot="Awaiting completion" onClick={onNavigate ? () => onNavigate("replenishment") : undefined} />
+        <KpiCard label="Monthly Expenses" value={peso(m.monthlyExpenses)} icon={TrendingUp} tint="#c8102e" foot="Liquidated this month" onClick={onNavigate ? () => onNavigate("history") : undefined} />
+        <KpiCard label="Active Petty Cash Funds" value={funds.length + " Funds"} icon={PiggyBank} tint="#7c3aed" foot="Across all plants" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" foot="Released to date" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
+        <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#15803d" />
       </div>
 
       <div className="pcp-grid-2" style={{ marginBottom: 16 }}>
@@ -1807,18 +2034,19 @@ function Dashboard({ funds, requests, disbursements, liquidations }) {
 /* Single-branch dashboard (Manila / Warner / Disney) — same KPI set as the
    consolidated view, scoped to one branch's funds, requests, disbursements
    and liquidations. */
-function BranchDashboard({ label, branchCode, funds, requests, disbursements, liquidations }) {
+function BranchDashboard({ label, branchCode, funds, requests, disbursements, liquidations, replenishments }) {
   const fundsForBranch = useMemo(() => funds.filter((f) => f.branchCode === branchCode), [funds, branchCode]);
   const requestsForBranch = useMemo(() => requests.filter((r) => r.branchCode === branchCode), [requests, branchCode]);
   const disbForBranch = useMemo(() => disbursements.filter((d) => d.branchCode === branchCode), [disbursements, branchCode]);
+  const repForBranch = useMemo(() => (replenishments || []).filter((r) => r.branchCode === branchCode), [replenishments, branchCode]);
   const liqForBranch = useMemo(() => {
     const disbIds = new Set(disbForBranch.map((d) => d.id));
     return liquidations.filter((l) => disbIds.has(l.disbursementId));
   }, [liquidations, disbForBranch]);
 
   const m = useMemo(
-    () => computeMetrics(fundsForBranch, requestsForBranch, disbForBranch, liqForBranch),
-    [fundsForBranch, requestsForBranch, disbForBranch, liqForBranch]
+    () => computeMetrics(fundsForBranch, requestsForBranch, disbForBranch, liqForBranch, repForBranch),
+    [fundsForBranch, requestsForBranch, disbForBranch, liqForBranch, repForBranch]
   );
 
   const custodians = fundsForBranch.map((f) => f.custodian).filter(Boolean).join(", ");
@@ -2330,8 +2558,8 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
   return (
     <div>
       <TopBar
-        title="Disbursement Ledger"
-        sub="Full transaction history of all petty cash disbursements"
+        title="Petty Cash Release"
+        sub="Full transaction history of all petty cash releases (vouchers)"
         right={
           <>
             <button className="pcp-btn" onClick={() => window.print()}><Printer size={14} /> Print</button>
@@ -2662,7 +2890,7 @@ function ReferenceTable({ title, columns, rows }) {
   );
 }
 
-function MasterDataTab({ funds, disbursements, liquidations, onAddFund, onEditFund, onDeleteFund }) {
+function MasterDataTab({ funds, disbursements, liquidations, replenishments, onAddFund, onEditFund, onDeleteFund }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
 
@@ -2683,7 +2911,7 @@ function MasterDataTab({ funds, disbursements, liquidations, onAddFund, onEditFu
               <thead><tr><th>Plant</th><th>Branch</th><th>Company</th><th>Custodian</th><th>Beginning Balance</th><th>Available Balance</th><th></th></tr></thead>
               <tbody>
                 {funds.map((f) => {
-                  const mon = monitoringForFund(f, disbursements, liquidations);
+                  const mon = monitoringForFund(f, disbursements, liquidations, replenishments);
                   return (
                   <tr key={f.id}>
                     <td style={{ fontWeight: 600 }}>{f.label}</td>
@@ -2770,18 +2998,18 @@ function EditBalancesModal({ funds, onClose, onSave }) {
 
 /* Report for top management: PCF monitoring per fund + every transaction.
    Printable, and exportable to a multi-sheet Excel workbook. */
-function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
-  const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations), [funds, requests, disbursements, liquidations]);
+function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments }) {
+  const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations, replenishments), [funds, requests, disbursements, liquidations, replenishments]);
 
   const monitoring = useMemo(
-    () => funds.map((f) => ({ fund: f, ...monitoringForFund(f, disbursements, liquidations) })),
-    [funds, disbursements, liquidations]
+    () => funds.map((f) => ({ fund: f, ...monitoringForFund(f, disbursements, liquidations, replenishments) })),
+    [funds, disbursements, liquidations, replenishments]
   );
   const totals = useMemo(() => monitoring.reduce((t, r) => ({
     beginning: t.beginning + r.beginning, disbursed: t.disbursed + r.disbursed,
     liquidated: t.liquidated + r.liquidated, outstanding: t.outstanding + r.outstanding,
-    available: t.available + r.available,
-  }), { beginning: 0, disbursed: 0, liquidated: 0, outstanding: 0, available: 0 }), [monitoring]);
+    replenished: t.replenished + r.replenished, available: t.available + r.available,
+  }), { beginning: 0, disbursed: 0, liquidated: 0, outstanding: 0, replenished: 0, available: 0 }), [monitoring]);
 
   const disbRows = useMemo(
     () => [...disbursements].sort((a, b) => (b.date || "").localeCompare(a.date || "")),
@@ -2811,12 +3039,12 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
     const monRows = monitoring.map((r) => ({
       "Plant / Fund": r.fund.label, "Branch": r.fund.branchCode, "Company": companyOfBranch(r.fund.branchCode),
       "Custodian": r.fund.custodian, "Beginning Balance": r.beginning, "Total Disbursed": r.disbursed,
-      "Total Liquidated": r.liquidated, "Outstanding": r.outstanding, "Available Balance": r.available,
+      "Total Liquidated": r.liquidated, "Total Replenished": r.replenished, "Outstanding": r.outstanding, "Available Balance": r.available,
     }));
     monRows.push({
       "Plant / Fund": "TOTAL", "Branch": "", "Company": "", "Custodian": "",
       "Beginning Balance": totals.beginning, "Total Disbursed": totals.disbursed,
-      "Total Liquidated": totals.liquidated, "Outstanding": totals.outstanding, "Available Balance": totals.available,
+      "Total Liquidated": totals.liquidated, "Total Replenished": totals.replenished, "Outstanding": totals.outstanding, "Available Balance": totals.available,
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(monRows), "PCF Monitoring");
 
@@ -2845,8 +3073,16 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rRows.length ? rRows : [{}]), "Requests");
 
+    const repRows = (replenishments || []).map((r) => ({
+      "Replenishment No.": r.replenishmentNo, "Date": r.date, "Branch": r.branchCode,
+      "Company": companyOfBranch(r.branchCode), "Amount": r.amount, "Prepared By": r.preparedBy,
+      "Approved By": r.approvedBy, "Method": r.method, "Check / Ref. No.": r.checkNo,
+      "Status": r.status, "Remarks": r.remarks || "",
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(repRows.length ? repRows : [{}]), "Replenishments");
+
     downloadWorkbook(wb, `PCF_Management_Report_${todayISO()}.xlsx`);
-  }, [monitoring, totals, disbRows, liqRows, requests, liquidations]);
+  }, [monitoring, totals, disbRows, liqRows, requests, liquidations, replenishments]);
 
   return (
     <div>
@@ -2886,7 +3122,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
               <thead>
                 <tr>
                   <th>Plant / Fund</th><th>Company</th><th>Custodian</th><th>Beginning</th>
-                  <th>Disbursed</th><th>Liquidated</th><th>Outstanding</th><th>Available</th>
+                  <th>Disbursed</th><th>Liquidated</th><th>Replenished</th><th>Outstanding</th><th>Available</th>
                 </tr>
               </thead>
               <tbody>
@@ -2898,10 +3134,11 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
                     <td className="pcp-num">{peso(r.beginning)}</td>
                     <td className="pcp-num">{peso(r.disbursed)}</td>
                     <td className="pcp-num">{peso(r.liquidated)}</td>
+                    <td className="pcp-num">{peso(r.replenished)}</td>
                     <td className="pcp-num">{peso(r.outstanding)}</td>
                     <td className="pcp-num" style={{ fontWeight: 700, color: r.available < 0 ? "var(--brand)" : "var(--green)" }}>{peso(r.available)}</td>
                   </tr>
-                )) : <tr><td colSpan={8} className="pcp-empty">No funds configured</td></tr>}
+                )) : <tr><td colSpan={9} className="pcp-empty">No funds configured</td></tr>}
               </tbody>
               {monitoring.length ? (
                 <tfoot>
@@ -2910,6 +3147,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
                     <td className="pcp-num">{peso(totals.beginning)}</td>
                     <td className="pcp-num">{peso(totals.disbursed)}</td>
                     <td className="pcp-num">{peso(totals.liquidated)}</td>
+                    <td className="pcp-num">{peso(totals.replenished)}</td>
                     <td className="pcp-num">{peso(totals.outstanding)}</td>
                     <td className="pcp-num">{peso(totals.available)}</td>
                   </tr>
@@ -2980,9 +3218,459 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations }) {
     </div>
   );
 }
+/* ============================= REPLENISHMENT ============================= */
+
+const REPLENISH_METHODS = ["Check", "Bank Transfer", "Cash"];
+const REPLENISH_STATUSES = ["Pending", "Approved", "Completed"];
+
+/* Amount already liquidated for a branch that has not yet been reimbursed by a
+   completed replenishment — the natural amount to replenish next. */
+function suggestedReplenishment(branchCode, disbursements, liquidations, replenishments) {
+  const liquidated = disbursements
+    .filter((d) => d.branchCode === branchCode)
+    .reduce((s, d) => s + liquidatedTotal(liquidationFor(d.id, liquidations)), 0);
+  const replenished = replenishments
+    .filter((r) => r.branchCode === branchCode && r.status === "Completed")
+    .reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  return Math.max(0, liquidated - replenished);
+}
+
+function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements, liquidations, replenishments, replenishment }) {
+  const isEdit = !!replenishment;
+  const [form, setForm] = useState(
+    replenishment
+      ? { ...replenishment, amount: replenishment.amount }
+      : {
+          date: todayISO(), branchCode: funds[0] ? funds[0].branchCode : BRANCHES[0].code,
+          amount: "", preparedBy: "", approvedBy: "", checkNo: "", method: "Check",
+          status: "Pending", remarks: "",
+        }
+  );
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const suggested = useMemo(() => suggestedReplenishment(form.branchCode, disbursements, liquidations, replenishments), [form.branchCode, disbursements, liquidations, replenishments]);
+  const valid = form.preparedBy.trim() && Number(form.amount) > 0;
+
+  return (
+    <div className="pcp-modal-backdrop" onClick={onClose}>
+      <div className="pcp-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="pcp-modal-head">
+          <h3>{isEdit ? "Edit Replenishment" : "New Replenishment"}</h3>
+          <button className="pcp-btn pcp-btn-ghost pcp-btn-sm" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className="pcp-modal-body">
+          <div className="pcp-field-row">
+            <div className="pcp-field">
+              <label>Replenishment No.</label>
+              <input className="pcp-input" value={isEdit ? replenishment.replenishmentNo : nextNo} disabled />
+            </div>
+            <div className="pcp-field">
+              <label>Date</label>
+              <input type="date" className="pcp-input" value={form.date} onChange={(e) => set("date", e.target.value)} />
+            </div>
+          </div>
+          <div className="pcp-field-row">
+            <div className="pcp-field">
+              <label>Fund / Branch</label>
+              <select className="pcp-select" value={form.branchCode} onChange={(e) => set("branchCode", e.target.value)}>
+                {COMPANIES.map((c) => (
+                  <optgroup label={c} key={c}>
+                    {branchesForCompany(c).map((b) => <option key={b.code} value={b.code}>{b.name} ({b.code})</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <div className="pcp-field">
+              <label>Amount (₱)</label>
+              <input type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
+              <div style={{ fontSize: 11, color: "var(--text-mut)", marginTop: 4 }}>
+                Suggested (unreimbursed liquidations): <strong>{peso(suggested)}</strong>
+                {suggested > 0 && <button className="pcp-btn pcp-btn-sm" style={{ marginLeft: 8 }} onClick={() => set("amount", suggested)}>Use</button>}
+              </div>
+            </div>
+          </div>
+          <div className="pcp-field-row">
+            <div className="pcp-field">
+              <label>Prepared By</label>
+              <input className="pcp-input" placeholder="Full name" value={form.preparedBy} onChange={(e) => set("preparedBy", e.target.value)} />
+            </div>
+            <div className="pcp-field">
+              <label>Approved By</label>
+              <input className="pcp-input" placeholder="Full name" value={form.approvedBy} onChange={(e) => set("approvedBy", e.target.value)} />
+            </div>
+          </div>
+          <div className="pcp-field-row">
+            <div className="pcp-field">
+              <label>Release Method</label>
+              <select className="pcp-select" value={form.method} onChange={(e) => set("method", e.target.value)}>
+                {REPLENISH_METHODS.map((mth) => <option key={mth}>{mth}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field">
+              <label>Check / Reference No.</label>
+              <input className="pcp-input" placeholder="e.g. CHK-00123" value={form.checkNo} onChange={(e) => set("checkNo", e.target.value)} />
+            </div>
+          </div>
+          <div className="pcp-field-row">
+            <div className="pcp-field">
+              <label>Status</label>
+              <select className="pcp-select" value={form.status} onChange={(e) => set("status", e.target.value)}>
+                {REPLENISH_STATUSES.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field">
+              <label>Remarks</label>
+              <input className="pcp-input" placeholder="Optional notes" value={form.remarks} onChange={(e) => set("remarks", e.target.value)} />
+            </div>
+          </div>
+        </div>
+        <div className="pcp-modal-foot">
+          <button className="pcp-btn" onClick={onClose}>Cancel</button>
+          <button className="pcp-btn pcp-btn-primary" disabled={!valid} onClick={() => onSave({ ...form, amount: Number(form.amount) })}>{isEdit ? "Save Changes" : "Create Replenishment"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, onCreate, onEdit, onComplete, onDelete }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [search, setSearch] = useState("");
+
+  const nextNo = "PCRP-2026-" + String(replenishments.length + 1).padStart(4, "0");
+  const totalCompleted = replenishments.filter((r) => r.status === "Completed").reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const totalPending = replenishments.filter((r) => r.status !== "Completed").reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+  const filtered = replenishments.filter((r) => {
+    if (statusFilter !== "All" && r.status !== statusFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!(r.replenishmentNo.toLowerCase().includes(q) || (r.preparedBy || "").toLowerCase().includes(q) || (r.checkNo || "").toLowerCase().includes(q))) return false;
+    }
+    return true;
+  }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  return (
+    <div>
+      <TopBar
+        title="Replenishment"
+        sub="Reimburse funds for liquidated expenses to restore the imprest balance"
+        right={<button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Replenishment</button>}
+      />
+      <div className="pcp-content">
+        <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+          <KpiCard label="Total Replenished" value={peso(totalCompleted)} icon={RefreshCw} tint="#15803d" foot="Completed reimbursements" />
+          <KpiCard label="Pending Replenishments" value={replenishments.filter((r) => r.status !== "Completed").length} icon={Clock} tint="#b9790a" foot={peso(totalPending) + " in progress"} />
+          <KpiCard label="Replenishment Records" value={replenishments.length} icon={Landmark} tint="#2054a3" />
+        </div>
+        <div className="pcp-card">
+          <div style={{ padding: "14px 18px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid var(--line)" }}>
+            <div style={{ position: "relative", flex: 1, maxWidth: 280 }}>
+              <Search size={14} style={{ position: "absolute", left: 9, top: 9, color: "#9098b3" }} />
+              <input className="pcp-input" style={{ paddingLeft: 28 }} placeholder="Search no., preparer or check no." value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <select className="pcp-select" style={{ width: 170 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              {["All", ...REPLENISH_STATUSES].map((s) => <option key={s}>{s}</option>)}
+            </select>
+            <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-mut)" }}>{filtered.length} of {replenishments.length} records</div>
+          </div>
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead>
+                <tr>
+                  <th>Replenishment No.</th><th>Date</th><th>Fund / Branch</th><th>Amount</th>
+                  <th>Prepared By</th><th>Approved By</th><th>Method</th><th>Check / Ref.</th><th>Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length ? filtered.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.replenishmentNo}</td>
+                    <td>{fmtDate(r.date)}</td>
+                    <td>{r.branchCode} <span style={{ fontSize: 11, color: "var(--text-mut)" }}>· {companyOfBranch(r.branchCode)}</span></td>
+                    <td className="pcp-num">{peso(r.amount)}</td>
+                    <td>{r.preparedBy || "—"}</td>
+                    <td>{r.approvedBy || "—"}</td>
+                    <td>{r.method}</td>
+                    <td>{r.checkNo || "—"}</td>
+                    <td><Badge status={r.status} /></td>
+                    <td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {r.status !== "Completed" && (
+                          <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => onComplete(r.id)} title="Mark completed"><Check size={12} /></button>
+                        )}
+                        <button className="pcp-btn pcp-btn-sm" onClick={() => setEditing(r)} title="Edit"><Edit3 size={12} /></button>
+                        <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => onDelete(r.id)} title="Delete"><Trash2 size={12} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                )) : <tr><td colSpan={10} className="pcp-empty">No replenishment records match your filters</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {showForm && (
+        <ReplenishmentFormModal
+          nextNo={nextNo} funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
+          onClose={() => setShowForm(false)}
+          onSave={(form) => { onCreate({ ...form, replenishmentNo: nextNo }); setShowForm(false); }}
+        />
+      )}
+      {editing && (
+        <ReplenishmentFormModal
+          replenishment={editing} funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
+          onClose={() => setEditing(null)}
+          onSave={(form) => { onEdit(editing.id, form); setEditing(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============================= TRANSACTION HISTORY ============================= */
+
+/* Flatten every request, release, liquidation line and replenishment into one
+   unified, filterable transaction feed. */
+function buildTransactionFeed(requests, disbursements, liquidations, replenishments) {
+  const rows = [];
+  requests.forEach((r) => rows.push({
+    id: "t-req-" + r.id, type: "Request", date: r.date, ref: r.requestNo,
+    party: r.employee, branchCode: r.branchCode, department: r.department,
+    category: "", amount: Number(r.amount) || 0, status: r.status,
+  }));
+  disbursements.forEach((d) => rows.push({
+    id: "t-rel-" + d.id, type: "Release", date: d.date, ref: d.voucherNo,
+    party: d.employee, branchCode: d.branchCode, department: d.department,
+    category: d.expenseCategory, amount: Number(d.amount) || 0, status: liqStatusFor(d, liquidations),
+  }));
+  disbursements.forEach((d) => {
+    const liq = liquidationFor(d.id, liquidations);
+    if (!liq || !liq.lines) return;
+    liq.lines.forEach((l) => rows.push({
+      id: "t-liq-" + l.id, type: "Liquidation", date: l.date, ref: d.voucherNo,
+      party: d.employee, branchCode: d.branchCode, department: l.department,
+      category: l.category, amount: Number(l.amount) || 0, status: "Liquidated",
+    }));
+  });
+  (replenishments || []).forEach((r) => rows.push({
+    id: "t-rep-" + r.id, type: "Replenishment", date: r.date, ref: r.replenishmentNo,
+    party: r.preparedBy, branchCode: r.branchCode, department: "",
+    category: r.method, amount: Number(r.amount) || 0, status: r.status,
+  }));
+  return rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+
+function TransactionHistoryTab({ requests, disbursements, liquidations, replenishments, initialFilter }) {
+  const [type, setType] = useState("All");
+  const [company, setCompany] = useState("All");
+  const [status, setStatus] = useState("All");
+  const [search, setSearch] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [minAmt, setMinAmt] = useState("");
+  const [maxAmt, setMaxAmt] = useState("");
+
+  useEffect(() => { if (initialFilter && initialFilter.type) setType(initialFilter.type); }, [initialFilter]);
+
+  const feed = useMemo(() => buildTransactionFeed(requests, disbursements, liquidations, replenishments), [requests, disbursements, liquidations, replenishments]);
+
+  const filtered = useMemo(() => feed.filter((t) => {
+    if (type !== "All" && t.type !== type) return false;
+    if (company !== "All" && companyOfBranch(t.branchCode) !== company) return false;
+    if (status !== "All" && t.status !== status) return false;
+    if (from && (t.date || "") < from) return false;
+    if (to && (t.date || "") > to) return false;
+    if (minAmt !== "" && t.amount < Number(minAmt)) return false;
+    if (maxAmt !== "" && t.amount > Number(maxAmt)) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!((t.ref || "").toLowerCase().includes(q) || (t.party || "").toLowerCase().includes(q) || (t.category || "").toLowerCase().includes(q))) return false;
+    }
+    return true;
+  }), [feed, type, company, status, from, to, minAmt, maxAmt, search]);
+
+  const total = filtered.reduce((s, t) => s + t.amount, 0);
+
+  const exportExcel = useCallback(() => {
+    const rows = filtered.map((t) => ({
+      "Date": t.date, "Type": t.type, "Reference": t.ref, "Party": t.party,
+      "Branch": t.branchCode, "Company": companyOfBranch(t.branchCode),
+      "Department": deptDesc(t.department), "Category / Method": t.category,
+      "Amount": t.amount, "Status": t.status,
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{}]), "Transaction History");
+    downloadWorkbook(wb, `Transaction_History_${todayISO()}.xlsx`);
+  }, [filtered]);
+
+  const reset = () => { setType("All"); setCompany("All"); setStatus("All"); setSearch(""); setFrom(""); setTo(""); setMinAmt(""); setMaxAmt(""); };
+
+  return (
+    <div>
+      <TopBar
+        title="Transaction History"
+        sub="Every request, release, liquidation and replenishment in one filterable ledger"
+        right={<button className="pcp-btn pcp-btn-primary" onClick={exportExcel}><FileSpreadsheet size={14} /> Export to Excel</button>}
+      />
+      <div className="pcp-content">
+        <div className="pcp-card" style={{ marginBottom: 16 }}>
+          <div style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Type</label>
+              <select className="pcp-select" value={type} onChange={(e) => setType(e.target.value)}>
+                {["All", "Request", "Release", "Liquidation", "Replenishment"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Company</label>
+              <select className="pcp-select" value={company} onChange={(e) => setCompany(e.target.value)}>
+                {["All", ...COMPANIES].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Status</label>
+              <select className="pcp-select" value={status} onChange={(e) => setStatus(e.target.value)}>
+                {["All", "Pending", "Approved", "Rejected", "Disbursed", "Liquidated", "Completed", "Not Liquidated", "Partially Liquidated", "Fully Liquidated"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Search</label>
+              <input className="pcp-input" placeholder="Reference, party or category" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>From Date</label>
+              <input type="date" className="pcp-input" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>To Date</label>
+              <input type="date" className="pcp-input" value={to} onChange={(e) => setTo(e.target.value)} />
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Min Amount</label>
+              <input type="number" className="pcp-input" placeholder="0" value={minAmt} onChange={(e) => setMinAmt(e.target.value)} />
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Max Amount</label>
+              <input type="number" className="pcp-input" placeholder="∞" value={maxAmt} onChange={(e) => setMaxAmt(e.target.value)} />
+            </div>
+          </div>
+          <div style={{ padding: "0 18px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="pcp-btn pcp-btn-sm" onClick={reset}><FilterIcon size={12} /> Reset Filters</button>
+            <div style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--text-mut)" }}>
+              {filtered.length} of {feed.length} transactions · Total <strong style={{ color: "var(--text)" }}>{peso(total)}</strong>
+            </div>
+          </div>
+        </div>
+        <div className="pcp-card">
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead>
+                <tr>
+                  <th>Date</th><th>Type</th><th>Reference</th><th>Party</th><th>Branch</th>
+                  <th>Department</th><th>Category / Method</th><th>Amount</th><th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length ? filtered.map((t) => (
+                  <tr key={t.id}>
+                    <td>{fmtDate(t.date)}</td>
+                    <td><span className={"pcp-badge pcp-badge-" + (t.type === "Request" ? "amber" : t.type === "Release" ? "blue" : t.type === "Liquidation" ? "gray" : "green")}>{t.type}</span></td>
+                    <td>{t.ref}</td>
+                    <td>{t.party || "—"}</td>
+                    <td>{t.branchCode}</td>
+                    <td>{t.department ? deptDesc(t.department) : "—"}</td>
+                    <td style={{ maxWidth: 200, whiteSpace: "normal" }}>{t.category || "—"}</td>
+                    <td className="pcp-num">{peso(t.amount)}</td>
+                    <td><Badge status={t.status} /></td>
+                  </tr>
+                )) : <tr><td colSpan={9} className="pcp-empty">No transactions match your filters</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================= AUDIT TRAIL ============================= */
+
+const AUDIT_ACTIONS = ["Request Created", "Edited", "Approved", "Rejected", "Released", "Liquidated", "Replenished", "Deleted"];
+
+function AuditTrailTab({ auditLog }) {
+  const [search, setSearch] = useState("");
+  const [action, setAction] = useState("All");
+
+  const rows = useMemo(() => [...auditLog].sort((a, b) => (b.ts || "").localeCompare(a.ts || "")), [auditLog]);
+  const filtered = rows.filter((a) => {
+    if (action !== "All" && a.action !== action) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!((a.entity || "").toLowerCase().includes(q) || (a.user || "").toLowerCase().includes(q) || (a.remarks || "").toLowerCase().includes(q) || (a.action || "").toLowerCase().includes(q))) return false;
+    }
+    return true;
+  });
+
+  const fmtTs = (ts) => {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleString("en-PH", { year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  };
+
+  const exportExcel = useCallback(() => {
+    const out = filtered.map((a) => ({ "Date & Time": fmtTs(a.ts), "User": a.user, "Action": a.action, "Reference": a.entity, "Remarks": a.remarks }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(out.length ? out : [{}]), "Audit Trail");
+    downloadWorkbook(wb, `Audit_Trail_${todayISO()}.xlsx`);
+  }, [filtered]);
+
+  return (
+    <div>
+      <TopBar
+        title="Audit Trail"
+        sub="Complete chronological history of every action taken in the system"
+        right={<button className="pcp-btn pcp-btn-primary" onClick={exportExcel}><FileSpreadsheet size={14} /> Export to Excel</button>}
+      />
+      <div className="pcp-content">
+        <div className="pcp-card">
+          <div style={{ padding: "14px 18px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid var(--line)" }}>
+            <div style={{ position: "relative", flex: 1, maxWidth: 300 }}>
+              <Search size={14} style={{ position: "absolute", left: 9, top: 9, color: "#9098b3" }} />
+              <input className="pcp-input" style={{ paddingLeft: 28 }} placeholder="Search user, reference or remarks" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+            <select className="pcp-select" style={{ width: 180 }} value={action} onChange={(e) => setAction(e.target.value)}>
+              {["All", ...AUDIT_ACTIONS].map((s) => <option key={s}>{s}</option>)}
+            </select>
+            <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-mut)" }}>{filtered.length} of {auditLog.length} entries</div>
+          </div>
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead><tr><th>Date &amp; Time</th><th>User</th><th>Action</th><th>Reference</th><th>Remarks</th></tr></thead>
+              <tbody>
+                {filtered.length ? filtered.map((a) => (
+                  <tr key={a.id}>
+                    <td style={{ whiteSpace: "nowrap" }}><Clock size={12} style={{ verticalAlign: "-2px", marginRight: 5, color: "#9098b3" }} />{fmtTs(a.ts)}</td>
+                    <td>{a.user}</td>
+                    <td><span className={"pcp-badge pcp-badge-" + (a.action === "Rejected" || a.action === "Deleted" ? "red" : a.action === "Approved" || a.action === "Released" || a.action === "Replenished" ? "green" : a.action === "Liquidated" ? "blue" : "gray")}>{a.action}</span></td>
+                    <td>{a.entity}</td>
+                    <td style={{ whiteSpace: "normal" }}>{a.remarks}</td>
+                  </tr>
+                )) : <tr><td colSpan={5} className="pcp-empty">No audit entries match your filters</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============================= APP ============================= */
 
-export default function App() {
+export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("dashboard");
   const [dashboardBranch, setDashboardBranch] = useState("ALL");
@@ -2990,9 +3678,23 @@ export default function App() {
   const [requests, setRequests] = useState([]);
   const [disbursements, setDisbursements] = useState([]);
   const [liquidations, setLiquidations] = useState([]);
+  const [replenishments, setReplenishments] = useState([]);
+  const [auditLog, setAuditLog] = useState([]);
+  const [role, setRole] = useState(userRole || "Administrator");
+  /* Non-admins are locked to their assigned role; admins may view-as any role. */
+  useEffect(() => { setRole(userRole || "Administrator"); }, [userRole]);
+  const guardedSetRole = useCallback((r) => { if (isAdmin) setRole(r); }, [isAdmin]);
+  const [historyFilter, setHistoryFilter] = useState(null);
   const [disburseTarget, setDisburseTarget] = useState(null);
   const [showEditBalances, setShowEditBalances] = useState(false);
   const [saveTick, setSaveTick] = useState(0);
+
+  /* Append an entry to the immutable audit trail, tagged with the active role. */
+  const logAudit = useCallback((action, entity, remarks) => {
+    setAuditLog((log) => [...log, {
+      id: uid("aud"), ts: new Date().toISOString().slice(0, 19), user: role, action, entity, remarks: remarks || "",
+    }]);
+  }, [role]);
 
   useEffect(() => {
     (async () => {
@@ -3011,11 +3713,16 @@ export default function App() {
         setRequests(migrateRequests(saved.requests || seedRequests()));
         setDisbursements(saved.disbursements || seedDisbursements());
         setLiquidations(saved.liquidations || seedLiquidations());
+        setReplenishments(saved.replenishments || seedReplenishments());
+        setAuditLog(saved.auditLog || seedAuditLog());
+        /* Role is derived per-user from login, not from the shared blob. */
       } else {
         setFunds(seedFunds());
         setRequests(migrateRequests(seedRequests()));
         setDisbursements(seedDisbursements());
         setLiquidations(seedLiquidations());
+        setReplenishments(seedReplenishments());
+        setAuditLog(seedAuditLog());
       }
       setLoaded(true);
     })();
@@ -3023,8 +3730,8 @@ export default function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    saveState({ funds, requests, disbursements, liquidations });
-  }, [funds, requests, disbursements, liquidations, loaded]);
+    saveState({ funds, requests, disbursements, liquidations, replenishments, auditLog });
+  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, loaded]);
 
   /* ---- Requests ---- */
   const addRequest = useCallback((form) => {
@@ -3034,7 +3741,8 @@ export default function App() {
       amount: Number(form.amount), approver: form.approver, status: "Pending",
       approvals: defaultApprovals(),
     }]);
-  }, []);
+    logAudit("Request Created", form.requestNo, `${form.employee} · ${peso(Number(form.amount))} · ${form.purpose}`);
+  }, [logAudit]);
 
   const editRequest = useCallback((id, form) => {
     setRequests((rs) => rs.map((r) => (r.id === id ? {
@@ -3042,7 +3750,9 @@ export default function App() {
       branchCode: form.branchCode, purpose: form.purpose, amount: Number(form.amount),
       approver: form.approver,
     } : r)));
-  }, []);
+    const r = requests.find((x) => x.id === id);
+    logAudit("Edited", r ? r.requestNo : id, `Request updated · ${form.employee} · ${peso(Number(form.amount))}`);
+  }, [logAudit, requests]);
 
   /* Set one approval level, then recompute the overall request status. */
   const setApprovalLevel = useCallback((id, level, status, by) => {
@@ -3050,9 +3760,12 @@ export default function App() {
       if (r.id !== id || r.status === "Disbursed") return r;
       const approvals = normalizeApprovals(r.approvals);
       approvals[level] = { status, by: by || level, date: todayISO() };
-      return { ...r, approvals, status: overallApprovalStatus(approvals) };
+      const nextStatus = overallApprovalStatus(approvals);
+      const r2 = requests.find((x) => x.id === id);
+      logAudit(status === "Approved" ? "Approved" : "Rejected", r2 ? r2.requestNo : id, `${level} ${status.toLowerCase()}${nextStatus !== "Pending" ? ` · overall ${nextStatus}` : ""}`);
+      return { ...r, approvals, status: nextStatus };
     }));
-  }, []);
+  }, [logAudit, requests]);
 
   const approveLevel = useCallback((id, level) => setApprovalLevel(id, level, "Approved", level), [setApprovalLevel]);
   const rejectLevel = useCallback((id, level) => setApprovalLevel(id, level, "Rejected", level), [setApprovalLevel]);
@@ -3070,8 +3783,9 @@ export default function App() {
       remarks: extra.remarks, billed: false,
     }]);
     setRequests((rs) => rs.map((r) => (r.id === req.id ? { ...r, status: "Disbursed" } : r)));
+    logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`);
     setDisburseTarget(null);
-  }, [disburseTarget, nextVoucherNo]);
+  }, [disburseTarget, nextVoucherNo, logAudit]);
 
   const updateRemarks = useCallback((id, remarks) => {
     setDisbursements((ds) => ds.map((d) => (d.id === id ? { ...d, remarks } : d)));
@@ -3093,7 +3807,33 @@ export default function App() {
       return [...ls, { id: uid("liq"), disbursementId, createdDate: todayISO(), lines }];
     });
     setDisbursements((ds) => ds.map((d) => (d.id === disbursementId ? { ...d, status: "Closed" } : d)));
-  }, []);
+    const d = disbursements.find((x) => x.id === disbursementId);
+    const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    logAudit("Liquidated", d ? d.voucherNo : disbursementId, `${lines.length} receipt line(s) · ${peso(total)}`);
+  }, [logAudit, disbursements]);
+
+  /* ---- Replenishment ---- */
+  const addReplenishment = useCallback((form) => {
+    setReplenishments((rs) => [...rs, { id: uid("rep"), ...form }]);
+    logAudit("Replenished", form.replenishmentNo, `${peso(Number(form.amount))} · ${form.method}${form.checkNo ? ` · ${form.checkNo}` : ""} · ${form.status}`);
+  }, [logAudit]);
+
+  const editReplenishment = useCallback((id, form) => {
+    setReplenishments((rs) => rs.map((r) => (r.id === id ? { ...r, ...form } : r)));
+    logAudit("Edited", form.replenishmentNo || id, `Replenishment updated · ${peso(Number(form.amount))} · ${form.status}`);
+  }, [logAudit]);
+
+  const completeReplenishment = useCallback((id) => {
+    setReplenishments((rs) => rs.map((r) => (r.id === id ? { ...r, status: "Completed" } : r)));
+    const r = replenishments.find((x) => x.id === id);
+    logAudit("Replenished", r ? r.replenishmentNo : id, `Marked completed${r ? ` · ${peso(Number(r.amount))}` : ""}`);
+  }, [logAudit, replenishments]);
+
+  const deleteReplenishment = useCallback((id) => {
+    const r = replenishments.find((x) => x.id === id);
+    setReplenishments((rs) => rs.filter((x) => x.id !== id));
+    logAudit("Deleted", r ? r.replenishmentNo : id, "Replenishment record removed");
+  }, [logAudit, replenishments]);
 
   const exportLiquidation = useCallback((disbursement, liq) => {
     const rows = buildLiquidationExportRows(disbursement, liq);
@@ -3138,6 +3878,34 @@ export default function App() {
     setFunds((fs) => fs.map((x) => (map.has(x.id) ? { ...x, beginningBalance: map.get(x.id) } : x)));
   }, []);
 
+  /* ---- Roles, navigation & notifications ---- */
+  const allowedTabs = (ROLES[role] || ROLES["Administrator"]).tabs;
+  const navItems = useMemo(() => NAV_ITEMS.filter((it) => allowedTabs.includes(it.key)), [allowedTabs]);
+
+  /* Keep the active tab valid whenever the role (and its allowed tabs) changes. */
+  useEffect(() => {
+    if (loaded && !allowedTabs.includes(tab)) setTab(allowedTabs[0] || "dashboard");
+  }, [role, loaded]); // eslint-disable-line
+
+  const navigate = useCallback((key, opts) => {
+    if (!allowedTabs.includes(key)) return;
+    if (key === "history") setHistoryFilter(opts && opts.type ? { type: opts.type } : null);
+    setTab(key);
+  }, [allowedTabs]);
+
+  const notifications = useMemo(
+    () => buildNotifications(requests, disbursements, liquidations, replenishments),
+    [requests, disbursements, liquidations, replenishments]
+  );
+
+  const onNotifClick = useCallback((n) => {
+    if (n.type === "approval" || n.type === "approved" || n.type === "rejected") navigate("requests");
+    else if (n.type === "liquidation" || n.type === "overdue") navigate("liquidation");
+    else if (n.type === "replenished" || n.type === "replenish-pending") navigate("replenishment");
+  }, [navigate]);
+
+  const uiValue = useMemo(() => ({ notifications, role, setRole: guardedSetRole, canSwitchRole: !!isAdmin, onNotifClick }), [notifications, role, guardedSetRole, isAdmin, onNotifClick]);
+
   if (!loaded) {
     return (
       <div className="pcp-root" style={{ alignItems: "center", justifyContent: "center" }}>
@@ -3148,9 +3916,10 @@ export default function App() {
   }
 
   return (
+    <AppUI.Provider value={uiValue}>
     <div className="pcp-root">
       <style>{CSS}</style>
-      <Sidebar tab={tab} setTab={setTab} />
+      <Sidebar tab={tab} setTab={setTab} role={role} navItems={navItems} userEmail={userEmail} onSignOut={onSignOut} />
       <div className="pcp-main">
         {tab === "dashboard" && (
           <>
@@ -3178,7 +3947,7 @@ export default function App() {
                 ))}
               </div>
               {dashboardBranch === "ALL" ? (
-                <Dashboard funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} />
+                <Dashboard funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments} onNavigate={navigate} />
               ) : (
                 (() => {
                   const b = DASHBOARD_BRANCHES.find((x) => x.key === dashboardBranch);
@@ -3186,7 +3955,7 @@ export default function App() {
                     <BranchDashboard
                       label={b.label}
                       branchCode={b.branchCode}
-                      funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations}
+                      funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
                     />
                   );
                 })()
@@ -3215,14 +3984,32 @@ export default function App() {
             onExportAll={exportAllToAcumatica}
           />
         )}
+        {tab === "replenishment" && (
+          <ReplenishmentTab
+            replenishments={replenishments} funds={funds}
+            disbursements={disbursements} liquidations={liquidations}
+            onCreate={addReplenishment} onEdit={editReplenishment}
+            onComplete={completeReplenishment} onDelete={deleteReplenishment}
+          />
+        )}
+        {tab === "history" && (
+          <TransactionHistoryTab
+            requests={requests} disbursements={disbursements}
+            liquidations={liquidations} replenishments={replenishments}
+            initialFilter={historyFilter}
+          />
+        )}
         {tab === "report" && (
           <ManagementReportTab
-            funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations}
+            funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
           />
+        )}
+        {tab === "audit" && (
+          <AuditTrailTab auditLog={auditLog} />
         )}
         {tab === "masterdata" && (
           <MasterDataTab
-            funds={funds} disbursements={disbursements} liquidations={liquidations}
+            funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
             onAddFund={addFund} onEditFund={editFund} onDeleteFund={deleteFund}
           />
         )}
@@ -3244,9 +4031,115 @@ export default function App() {
         />
       )}
     </div>
+    </AppUI.Provider>
   );
+}
+
+/* ============================= AUTH GATE ============================= */
+
+/* Email/password sign-in screen shown when a Supabase database is configured.
+   Accounts are provisioned by an admin in the Supabase dashboard. */
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(""); setNotice(""); setBusy(true);
+    try {
+      const res = await window.PCP_AUTH.signIn(email.trim(), password);
+      if (res && res.error) setError(res.error.message || "Sign-in failed.");
+      /* On success, onAuthStateChange in <Root/> swaps in the app. */
+    } catch (err) {
+      setError("Could not reach the server. Check your connection.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const forgot = async () => {
+    setError(""); setNotice("");
+    if (!email.trim()) { setError("Enter your email first, then click Forgot password."); return; }
+    try {
+      const res = await window.PCP_AUTH.resetPassword(email.trim());
+      if (res && res.error) setError(res.error.message);
+      else setNotice("If that email has an account, a reset link is on its way.");
+    } catch (err) {
+      setError("Could not send the reset email.");
+    }
+  };
+
+  return (
+    <div className="pcp-root">
+      <style>{CSS}</style>
+      <div className="pcp-login-wrap">
+        <div className="pcp-login-card">
+          <div className="pcp-login-head">
+            <div className="pcp-brand-mark"><Wallet size={18} /></div>
+            <div className="pcp-login-title">Petty Cash Management System</div>
+            <div className="pcp-login-sub">Sign in to continue</div>
+          </div>
+          <form className="pcp-login-body" onSubmit={submit}>
+            {error && <div className="pcp-login-err">{error}</div>}
+            {notice && <div className="pcp-login-ok">{notice}</div>}
+            <div className="pcp-field">
+              <label>Email</label>
+              <input type="email" className="pcp-input" autoComplete="username" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            </div>
+            <div className="pcp-field">
+              <label>Password</label>
+              <input type="password" className="pcp-input" autoComplete="current-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            </div>
+            <button type="submit" className="pcp-btn pcp-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 4 }} disabled={busy}>
+              {busy ? "Signing in…" : "Sign In"}
+            </button>
+            <div className="pcp-login-foot">
+              <button type="button" className="pcp-link-btn" onClick={forgot}>Forgot password?</button>
+            </div>
+            <div className="pcp-login-foot" style={{ marginTop: 8 }}>
+              Access is provided by your administrator.
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Root decides between the login screen and the app. When no cloud database
+   is configured (local-only mode), it renders the app directly with no login. */
+function Root() {
+  const authEnabled = !!(window.PCP_AUTH && window.PCP_AUTH.enabled);
+  const [checking, setChecking] = useState(authEnabled);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    if (!authEnabled) return;
+    let active = true;
+    window.PCP_AUTH.getUser().then((u) => { if (active) { setUser(u); setChecking(false); } });
+    window.PCP_AUTH.onChange((session) => { if (active) { setUser(session ? session.user : null); setChecking(false); } });
+    return () => { active = false; };
+  }, [authEnabled]);
+
+  const signOut = useCallback(() => { window.PCP_AUTH.signOut(); }, []);
+
+  if (authEnabled && checking) {
+    return (
+      <div className="pcp-root" style={{ alignItems: "center", justifyContent: "center" }}>
+        <style>{CSS}</style>
+        <div style={{ color: "var(--text-mut)", fontSize: 13 }}>Checking sign-in…</div>
+      </div>
+    );
+  }
+  if (authEnabled && !user) return <LoginScreen />;
+
+  const access = resolveUserAccess(user ? user.email : null);
+  return <App userEmail={user ? user.email : null} onSignOut={authEnabled ? signOut : null} userRole={access.role} isAdmin={access.isAdmin} />;
 }
 
 /* ============================= MOUNT ============================= */
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(<Root />);
