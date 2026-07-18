@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
 <title>Petty Cash Management System</title>
 <style>html,body{margin:0;padding:0;height:100%;background:#F6F4EF;}#root{min-height:100vh;}</style>
 
@@ -45,8 +46,8 @@
      (it is protected by Row Level Security). Leave blank for local mode.
      ============================================================ -->
 <script>
-  window.PCP_SUPABASE_URL = "";      // e.g. "https://abcdefgh.supabase.co"
-  window.PCP_SUPABASE_ANON_KEY = ""; // e.g. "eyJhbGciOiJI..."
+  window.PCP_SUPABASE_URL = "https://cyizlubajqottkadpibk.supabase.co";
+  window.PCP_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5aXpsdWJhanFvdHRrYWRwaWJrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzNzU3MjIsImV4cCI6MjA5OTk1MTcyMn0.Ay8K-2qy0INM8OAsbBigTP2I42dl0-oc6X3s_rKBKAM";
   window.PCP_TABLE = "pcp_state";
 
   /* ---- Access control ----
@@ -54,12 +55,11 @@
      system as any role. Everyone else is locked to a restricted role and
      cannot switch. Match by full email or by the username part before "@",
      case-insensitive. Create these same accounts in Supabase > Authentication. */
-  window.PCP_ADMIN_EMAILS = ["a1plus"];   // e.g. ["a1plus", "admin@a1plus.com"]
+  window.PCP_ADMIN_EMAILS = ["a1plusadmin@a1plus.com"];   // full super access
   window.PCP_DEFAULT_ROLE = "Requestor";  // role for any signed-in user not listed below
   window.PCP_USER_ROLES = {               // optional: pin specific users to a role
-    // "cashier@a1plus.com": "Cashier",
-    // "grace@a1plus.com": "Finance Manager",
-    // "accounting@a1plus.com": "Accounting",
+    "a1plususer1@a1plus.com": "Finance Manager",
+    "a1plususer2@a1plus.com": "Accounting",
   };
 
   /* ---- Built-in login (no database needed) ----
@@ -160,7 +160,8 @@
   })();
 </script>
 
-<!-- The portal itself, transpiled in the browser by Babel -->
-<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx"></script>
+<!-- The portal itself, transpiled in the browser by Babel.
+     Bump the ?v= number whenever you deploy a change so browsers reload it. -->
+<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx?v=20260718d"></script>
 </body>
 </html>
