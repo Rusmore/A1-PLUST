@@ -1773,7 +1773,6 @@ function TopBar({ title, sub, right }) {
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         {right}
         <NotificationBell />
-        <RoleSelector />
       </div>
     </div>
   );
@@ -2656,11 +2655,15 @@ function emptyLine() {
 
 function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
   const [lines, setLines] = useState(liquidation ? liquidation.lines.map((l) => ({ ...l })) : [emptyLine()]);
+  const [attachments, setAttachments] = useState(liquidation && liquidation.attachments ? liquidation.attachments : []);
   const [saved, setSaved] = useState(true);
+  const [uploadNote, setUploadNote] = useState("");
 
   useEffect(() => {
     setLines(liquidation ? liquidation.lines.map((l) => ({ ...l })) : [emptyLine()]);
+    setAttachments(liquidation && liquidation.attachments ? liquidation.attachments : []);
     setSaved(true);
+    setUploadNote("");
   }, [disbursement.id]);
 
   const updateLine = (id, patch) => {
@@ -2670,12 +2673,38 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
   const addLine = () => { setLines((ls) => [...ls, emptyLine()]); setSaved(false); };
   const removeLine = (id) => { setLines((ls) => ls.filter((l) => l.id !== id)); setSaved(false); };
 
+  /* Supporting documents (official receipts, sales invoices, etc.) are read as
+     data URLs and stored with the liquidation. Capped per-file to keep the
+     shared record from growing too large. */
+  const MAX_FILE_BYTES = 2 * 1024 * 1024; // 2 MB per file
+  const onPickFiles = (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    setUploadNote("");
+    files.forEach((file) => {
+      if (file.size > MAX_FILE_BYTES) {
+        setUploadNote(`"${file.name}" is larger than 2 MB and was skipped. Please compress it first.`);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAttachments((as) => [...as, {
+          id: uid("att"), name: file.name, type: file.type || "file",
+          size: file.size, data: reader.result, uploadedAt: todayISO(),
+        }]);
+        setSaved(false);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+  const removeAttachment = (id) => { setAttachments((as) => as.filter((a) => a.id !== id)); setSaved(false); };
+
   const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const remaining = disbursement.amount - total;
   const validLines = lines.filter((l) => l.expense.trim() && Number(l.amount) > 0);
 
   const handleSave = () => {
-    onSave(disbursement.id, validLines.map((l) => ({ ...l, amount: Number(l.amount) })));
+    onSave(disbursement.id, validLines.map((l) => ({ ...l, amount: Number(l.amount) })), attachments);
     setSaved(true);
   };
 
@@ -2741,6 +2770,55 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
       ))}
       <button className="pcp-btn pcp-btn-sm" onClick={addLine} style={{ marginTop: 4 }}><Plus size={12} /> Add Receipt Line</button>
 
+      {/* Supporting documents */}
+      <div style={{ marginTop: 18, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div className="pcp-section-title" style={{ margin: 0 }}>
+            <Receipt size={15} color="#c8102e" /> Supporting Documents
+            <span style={{ fontSize: 11.5, color: "var(--text-mut)", fontWeight: 500, marginLeft: 6 }}>
+              ({attachments.length}) — official receipts, sales invoices, etc.
+            </span>
+          </div>
+          <label className="pcp-btn pcp-btn-sm" style={{ cursor: "pointer", margin: 0 }}>
+            <Download size={12} style={{ transform: "rotate(180deg)" }} /> Upload
+            <input
+              type="file"
+              multiple
+              accept="image/*,application/pdf"
+              style={{ display: "none" }}
+              onChange={(e) => { onPickFiles(e.target.files); e.target.value = ""; }}
+            />
+          </label>
+        </div>
+
+        {uploadNote && (
+          <div style={{ background: "var(--amber-bg)", color: "var(--amber)", fontSize: 11.5, padding: "8px 11px", borderRadius: 8, marginBottom: 10 }}>
+            {uploadNote}
+          </div>
+        )}
+
+        {attachments.length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {attachments.map((a) => (
+              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--line)", borderRadius: 8, padding: "8px 11px" }}>
+                <FileText size={15} color="#2054a3" style={{ flexShrink: 0 }} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                  <div style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
+                    {(a.size / 1024).toFixed(0)} KB · uploaded {fmtDate(a.uploadedAt)}
+                  </div>
+                </div>
+                <a className="pcp-btn pcp-btn-sm" href={a.data} target="_blank" rel="noopener noreferrer" title="View / download">View</a>
+                <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => removeAttachment(a.id)} title="Remove"><Trash2 size={13} color="var(--brand)" /></button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--text-mut)", padding: "10px 0" }}>
+            No documents attached yet. Click <strong>Upload</strong> to attach scanned receipts or invoices (images or PDF, up to 2 MB each).
+          </div>
+        )}
+      </div>
 
       {remaining < 0 && (
         <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", background: "var(--red-bg)", padding: "10px 12px", borderRadius: 8, fontSize: 12, color: "var(--brand-dark)" }}>
@@ -3800,16 +3878,17 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
   }, []);
 
   /* ---- Liquidation ---- */
-  const saveLiquidation = useCallback((disbursementId, lines) => {
+  const saveLiquidation = useCallback((disbursementId, lines, attachments) => {
+    const atts = attachments || [];
     setLiquidations((ls) => {
       const exists = ls.find((l) => l.disbursementId === disbursementId);
-      if (exists) return ls.map((l) => (l.disbursementId === disbursementId ? { ...l, lines } : l));
-      return [...ls, { id: uid("liq"), disbursementId, createdDate: todayISO(), lines }];
+      if (exists) return ls.map((l) => (l.disbursementId === disbursementId ? { ...l, lines, attachments: atts } : l));
+      return [...ls, { id: uid("liq"), disbursementId, createdDate: todayISO(), lines, attachments: atts }];
     });
     setDisbursements((ds) => ds.map((d) => (d.id === disbursementId ? { ...d, status: "Closed" } : d)));
     const d = disbursements.find((x) => x.id === disbursementId);
     const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
-    logAudit("Liquidated", d ? d.voucherNo : disbursementId, `${lines.length} receipt line(s) · ${peso(total)}`);
+    logAudit("Liquidated", d ? d.voucherNo : disbursementId, `${lines.length} receipt line(s) · ${peso(total)}${atts.length ? ` · ${atts.length} document(s)` : ""}`);
   }, [logAudit, disbursements]);
 
   /* ---- Replenishment ---- */
