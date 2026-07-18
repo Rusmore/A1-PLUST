@@ -4037,10 +4037,26 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
 
 /* ============================= AUTH GATE ============================= */
 
-/* Email/password sign-in screen shown when a Supabase database is configured.
-   Accounts are provisioned by an admin in the Supabase dashboard. */
-function LoginScreen() {
-  const [email, setEmail] = useState("");
+const LOCAL_SESSION_KEY = "pcp-local-session";
+
+/* Validate a username/password against the built-in accounts defined in
+   index.html (window.PCP_LOCAL_USERS). Used only when no Supabase database
+   is configured, so there is a working login/logout out of the box. */
+function localSignIn(username, password) {
+  const users = window.PCP_LOCAL_USERS || [];
+  const u = users.find((x) =>
+    String(x.user).trim().toLowerCase() === String(username).trim().toLowerCase() &&
+    String(x.password) === String(password)
+  );
+  if (!u) return null;
+  return { user: u.user, role: (u.role && ROLES[u.role]) ? u.role : "Requestor" };
+}
+
+/* Sign-in screen. mode="cloud" uses Supabase email/password; mode="local"
+   uses the built-in accounts (username/password). */
+function LoginScreen({ mode, onLocalLogin }) {
+  const cloud = mode === "cloud";
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -4050,11 +4066,16 @@ function LoginScreen() {
     e.preventDefault();
     setError(""); setNotice(""); setBusy(true);
     try {
-      const res = await window.PCP_AUTH.signIn(email.trim(), password);
-      if (res && res.error) setError(res.error.message || "Sign-in failed.");
-      /* On success, onAuthStateChange in <Root/> swaps in the app. */
+      if (cloud) {
+        const res = await window.PCP_AUTH.signIn(identifier.trim(), password);
+        if (res && res.error) setError(res.error.message || "Sign-in failed.");
+        /* On success, onAuthStateChange in <Root/> swaps in the app. */
+      } else {
+        const res = onLocalLogin(identifier, password);
+        if (res && res.error) setError(res.error.message);
+      }
     } catch (err) {
-      setError("Could not reach the server. Check your connection.");
+      setError(cloud ? "Could not reach the server. Check your connection." : "Sign-in failed.");
     } finally {
       setBusy(false);
     }
@@ -4062,9 +4083,9 @@ function LoginScreen() {
 
   const forgot = async () => {
     setError(""); setNotice("");
-    if (!email.trim()) { setError("Enter your email first, then click Forgot password."); return; }
+    if (!identifier.trim()) { setError("Enter your email first, then click Forgot password."); return; }
     try {
-      const res = await window.PCP_AUTH.resetPassword(email.trim());
+      const res = await window.PCP_AUTH.resetPassword(identifier.trim());
       if (res && res.error) setError(res.error.message);
       else setNotice("If that email has an account, a reset link is on its way.");
     } catch (err) {
@@ -4086,8 +4107,16 @@ function LoginScreen() {
             {error && <div className="pcp-login-err">{error}</div>}
             {notice && <div className="pcp-login-ok">{notice}</div>}
             <div className="pcp-field">
-              <label>Email</label>
-              <input type="email" className="pcp-input" autoComplete="username" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+              <label>{cloud ? "Email" : "Username"}</label>
+              <input
+                type={cloud ? "email" : "text"}
+                className="pcp-input"
+                autoComplete="username"
+                placeholder={cloud ? "you@company.com" : "e.g. a1plus"}
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                required
+              />
             </div>
             <div className="pcp-field">
               <label>Password</label>
@@ -4096,9 +4125,11 @@ function LoginScreen() {
             <button type="submit" className="pcp-btn pcp-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 4 }} disabled={busy}>
               {busy ? "Signing in…" : "Sign In"}
             </button>
-            <div className="pcp-login-foot">
-              <button type="button" className="pcp-link-btn" onClick={forgot}>Forgot password?</button>
-            </div>
+            {cloud && (
+              <div className="pcp-login-foot">
+                <button type="button" className="pcp-link-btn" onClick={forgot}>Forgot password?</button>
+              </div>
+            )}
             <div className="pcp-login-foot" style={{ marginTop: 8 }}>
               Access is provided by your administrator.
             </div>
@@ -4109,35 +4140,75 @@ function LoginScreen() {
   );
 }
 
-/* Root decides between the login screen and the app. When no cloud database
-   is configured (local-only mode), it renders the app directly with no login. */
+/* Root chooses the auth mode:
+   - "cloud": a Supabase database is configured → email login (shared, secure).
+   - "local": no database, but built-in accounts exist → username login.
+   - "off":  neither → app opens directly as admin (offline/demo). */
 function Root() {
-  const authEnabled = !!(window.PCP_AUTH && window.PCP_AUTH.enabled);
-  const [checking, setChecking] = useState(authEnabled);
+  const cloudEnabled = !!(window.PCP_AUTH && window.PCP_AUTH.enabled);
+  const localUsers = window.PCP_LOCAL_USERS || [];
+  const localEnabled = !cloudEnabled && localUsers.length > 0;
+
+  const [checking, setChecking] = useState(cloudEnabled);
   const [user, setUser] = useState(null);
+  const [localSession, setLocalSession] = useState(() => {
+    try { const v = localStorage.getItem(LOCAL_SESSION_KEY); return v ? JSON.parse(v) : null; }
+    catch (e) { return null; }
+  });
 
   useEffect(() => {
-    if (!authEnabled) return;
+    if (!cloudEnabled) return;
     let active = true;
     window.PCP_AUTH.getUser().then((u) => { if (active) { setUser(u); setChecking(false); } });
     window.PCP_AUTH.onChange((session) => { if (active) { setUser(session ? session.user : null); setChecking(false); } });
     return () => { active = false; };
-  }, [authEnabled]);
+  }, [cloudEnabled]);
 
-  const signOut = useCallback(() => { window.PCP_AUTH.signOut(); }, []);
+  const cloudSignOut = useCallback(() => { window.PCP_AUTH.signOut(); }, []);
 
-  if (authEnabled && checking) {
+  const doLocalLogin = useCallback((username, password) => {
+    const s = localSignIn(username, password);
+    if (!s) return { error: { message: "Invalid username or password." } };
+    try { localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify(s)); } catch (e) {}
+    setLocalSession(s);
+    return {};
+  }, []);
+
+  const localSignOut = useCallback(() => {
+    try { localStorage.removeItem(LOCAL_SESSION_KEY); } catch (e) {}
+    setLocalSession(null);
+  }, []);
+
+  /* ---- Cloud mode ---- */
+  if (cloudEnabled) {
+    if (checking) {
+      return (
+        <div className="pcp-root" style={{ alignItems: "center", justifyContent: "center" }}>
+          <style>{CSS}</style>
+          <div style={{ color: "var(--text-mut)", fontSize: 13 }}>Checking sign-in…</div>
+        </div>
+      );
+    }
+    if (!user) return <LoginScreen mode="cloud" />;
+    const access = resolveUserAccess(user.email);
+    return <App userEmail={user.email} onSignOut={cloudSignOut} userRole={access.role} isAdmin={access.isAdmin} />;
+  }
+
+  /* ---- Local mode (built-in accounts) ---- */
+  if (localEnabled) {
+    if (!localSession) return <LoginScreen mode="local" onLocalLogin={doLocalLogin} />;
     return (
-      <div className="pcp-root" style={{ alignItems: "center", justifyContent: "center" }}>
-        <style>{CSS}</style>
-        <div style={{ color: "var(--text-mut)", fontSize: 13 }}>Checking sign-in…</div>
-      </div>
+      <App
+        userEmail={localSession.user}
+        onSignOut={localSignOut}
+        userRole={localSession.role}
+        isAdmin={localSession.role === "Administrator"}
+      />
     );
   }
-  if (authEnabled && !user) return <LoginScreen />;
 
-  const access = resolveUserAccess(user ? user.email : null);
-  return <App userEmail={user ? user.email : null} onSignOut={authEnabled ? signOut : null} userRole={access.role} isAdmin={access.isAdmin} />;
+  /* ---- No auth configured ---- */
+  return <App />;
 }
 
 /* ============================= MOUNT ============================= */

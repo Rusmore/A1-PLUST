@@ -62,6 +62,23 @@
     // "accounting@a1plus.com": "Accounting",
   };
 
+  /* ---- Built-in login (no database needed) ----
+     If you are NOT using Supabase above, these accounts provide a working
+     login/logout right away. A default admin is included below.
+     IMPORTANT: change the default password, and note that because this runs
+     in the browser, these passwords are visible in the page source — fine for
+     a basic internal gate, but for real security use the Supabase login above.
+     Roles: Administrator, Finance Manager, Accounting, Cashier,
+            Department Head, Requestor. */
+  window.PCP_LOCAL_USERS = [
+    { user: "super admin",      password: "super admin",      role: "Administrator" },
+    { user: "requestor",        password: "requestor",        role: "Requestor" },
+    { user: "department head",  password: "department head",  role: "Department Head" },
+    { user: "cashier",          password: "cashier",          role: "Cashier" },
+    { user: "accounting",       password: "accounting",       role: "Accounting" },
+    { user: "finance manager",  password: "finance manager",  role: "Finance Manager" },
+  ];
+
   /* Storage adapter: Supabase (shared) when configured, else localStorage.
      window.storage is defined synchronously so the app can call it
      immediately; cloud calls await the client via the sbReady promise. */
