@@ -1344,11 +1344,18 @@ const CSS = `
   .pcp-brand-title { font-weight: 700; font-size: 14.5px; color: #fff; letter-spacing: 0.2px; }
   .pcp-brand-sub { font-size: 10.5px; color: #8891a8; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 1px; }
 
-  .pcp-nav { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+  .pcp-nav { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .pcp-nav::-webkit-scrollbar { width: 6px; }
+  .pcp-nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 3px; }
+  .pcp-nav-group-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+    color: #7f889f; padding: 12px 8px 4px 8px; margin-top: 2px;
+  }
+  .pcp-nav-group:first-child .pcp-nav-group-label { margin-top: 0; }
   .pcp-nav-item {
     display: flex; align-items: center; gap: 10px;
-    padding: 9px 11px; border-radius: 8px; cursor: pointer;
-    color: #b7bccd; font-size: 13px; font-weight: 500;
+    padding: 8px 11px 8px 14px; border-radius: 8px; cursor: pointer;
+    color: #b7bccd; font-size: 12.5px; font-weight: 500;
     transition: background 0.12s, color 0.12s;
     border: none; background: transparent; text-align: left; width: 100%;
   }
@@ -1601,8 +1608,39 @@ const NAV_ITEMS = [
   { key: "settings", label: "System Settings", icon: Settings },
 ];
 
-function Sidebar({ tab, setTab, role, navItems, userEmail, userName, onSignOut, onChangePassword }) {
-  const items = navItems || NAV_ITEMS;
+/* Modules that get their OWN separate tab per plant (Manila / Warner / Disney /
+   RG and Co.). Each plant + module pair is a distinct nav tab so a custodian
+   only ever sees the tabs for the plant(s) they are allowed to access. */
+const PLANT_MODULES = [
+  { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "requests", label: "Petty Cash Requests", icon: ClipboardList },
+  { key: "disbursements", label: "Release Ledger", icon: Receipt },
+  { key: "liquidation", label: "Liquidation", icon: FileSpreadsheet },
+  { key: "replenishment", label: "Replenishment", icon: RefreshCw },
+  { key: "history", label: "Transaction History", icon: History },
+  { key: "report", label: "Reports", icon: FileText },
+];
+const PLANT_MODULE_KEYS = PLANT_MODULES.map((m) => m.key);
+
+/* System-wide modules that stay as a single shared tab (not per plant). */
+const GLOBAL_MODULES = [
+  { key: "audit", label: "Audit Trail", icon: ShieldCheck },
+  { key: "masterdata", label: "Funds & Master Data", icon: Database },
+  { key: "users", label: "User Management", icon: UserCog },
+  { key: "settings", label: "System Settings", icon: Settings },
+];
+
+/* Encode / decode a plant-scoped tab key, e.g. "A1+::requests". */
+const TAB_SEP = "::";
+const plantTabKey = (plantCode, moduleKey) => plantCode + TAB_SEP + moduleKey;
+const parseTab = (tab) => {
+  const i = (tab || "").indexOf(TAB_SEP);
+  if (i === -1) return { plant: null, module: tab };
+  return { plant: tab.slice(0, i), module: tab.slice(i + TAB_SEP.length) };
+};
+
+function Sidebar({ tab, setTab, role, navGroups, userEmail, userName, onSignOut, onChangePassword }) {
+  const groups = navGroups || [];
   return (
     <aside className="pcp-sidebar">
       <div className="pcp-brand-row">
@@ -1613,19 +1651,24 @@ function Sidebar({ tab, setTab, role, navItems, userEmail, userName, onSignOut, 
         </div>
       </div>
       <nav className="pcp-nav">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.key}
-              className={"pcp-nav-item" + (tab === item.key ? " active" : "")}
-              onClick={() => setTab(item.key)}
-            >
-              <Icon size={16} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+        {groups.map((group) => (
+          <div className="pcp-nav-group" key={group.key}>
+            {group.label && <div className="pcp-nav-group-label">{group.label}</div>}
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.tabKey}
+                  className={"pcp-nav-item" + (tab === item.tabKey ? " active" : "")}
+                  onClick={() => setTab(item.tabKey)}
+                >
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
       <div className="pcp-sidebar-foot">
         {(userName || role) && (
@@ -2192,7 +2235,7 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
   );
 }
 
-function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, onDisburse, plantOptions, canApprove, canRelease }) {
+function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, onDisburse, plantOptions, canApprove, canRelease, plantTitle }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
@@ -2215,7 +2258,7 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
   return (
     <div>
       <TopBar
-        title="Petty Cash Requests"
+        title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Petty Cash Requests"}
         sub="Submit and approve cash advance requests before release"
         right={<button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Request</button>}
       />
@@ -2428,7 +2471,7 @@ const SORT_FIELDS = {
   branchCode: (d) => d.branchCode, amount: (d) => d.amount,
 };
 
-function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions }) {
+function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions, plantTitle }) {
   const [search, setSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -2482,7 +2525,7 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
   return (
     <div>
       <TopBar
-        title="Petty Cash Release"
+        title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Release Ledger"}
         sub="Full transaction history of all petty cash releases (vouchers)"
         right={
           <>
@@ -2755,7 +2798,7 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
   );
 }
 
-function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions }) {
+function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions, plantTitle }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [plant, setPlant] = useState("ALL");
@@ -2772,7 +2815,7 @@ function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExpo
   return (
     <div>
       <TopBar
-        title="Liquidation"
+        title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Liquidation"}
         sub="Break down each cash advance into itemized receipts and reconcile the balance"
         right={
           <button className="pcp-btn pcp-btn-primary" onClick={onExportAll} disabled={!exportableCount}>
@@ -3005,7 +3048,7 @@ function EditBalancesModal({ funds, onClose, onSave }) {
 
 /* Report for top management: PCF monitoring per fund + every transaction.
    Printable, and exportable to a multi-sheet Excel workbook. */
-function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments }) {
+function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments, plantTitle }) {
   const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations, replenishments), [funds, requests, disbursements, liquidations, replenishments]);
 
   const monitoring = useMemo(
@@ -3089,7 +3132,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
   return (
     <div>
       <TopBar
-        title="Management Report"
+        title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Reports"}
         sub="PCF monitoring and complete transaction report for top management"
         right={
           <>
@@ -3322,7 +3365,7 @@ function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements,
   );
 }
 
-function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, onCreate, onEdit, onComplete, onDelete, plantOptions, canEdit }) {
+function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, onCreate, onEdit, onComplete, onDelete, plantOptions, canEdit, plantTitle }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
@@ -3350,7 +3393,7 @@ function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, 
   return (
     <div>
       <TopBar
-        title="Replenishment"
+        title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Replenishment"}
         sub="Reimburse funds for liquidated expenses to restore the imprest balance"
         right={<button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Replenishment</button>}
       />
@@ -3509,7 +3552,7 @@ function TransactionHistoryTab({ requests, disbursements, liquidations, replenis
   return (
     <div>
       <TopBar
-        title="Transaction History"
+        title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Transaction History"}
         sub="Every request, release, liquidation and replenishment in one filterable ledger"
         right={<button className="pcp-btn pcp-btn-primary" onClick={exportExcel}><FileSpreadsheet size={14} /> Export to Excel</button>}
       />
@@ -3805,7 +3848,6 @@ function SystemSettingsTab({ userName, userEmail, role, plants }) {
 export default function App({ userEmail, userName, onSignOut, userRole, isAdmin, userPlants }) {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("dashboard");
-  const [dashboardBranch, setDashboardBranch] = useState("ALL");
   const [funds, setFunds] = useState([]);
   const [requests, setRequests] = useState([]);
   const [disbursements, setDisbursements] = useState([]);
@@ -4053,27 +4095,87 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     return liquidations.filter((l) => ids.has(l.disbursementId));
   }, [liquidations, visibleDisbursements]);
   /* Dashboard plant tabs limited to the user's plants. */
-  const dashBranches = useMemo(() => DASHBOARD_BRANCHES.filter((b) => allowedPlants.includes(b.branchCode)), [allowedPlants]);
-  const showConsolidated = dashBranches.length > 1;
-  useEffect(() => {
-    if (!loaded) return;
-    if (!showConsolidated && dashboardBranch === "ALL" && dashBranches[0]) setDashboardBranch(dashBranches[0].key);
-  }, [loaded, showConsolidated]); // eslint-disable-line
+
+  /* ---- Separate tab per plant ---- */
+  /* The active tab is either a global module key ("audit") or a plant-scoped
+     key ("A1+::requests"). Parse it so each module renders only its own plant. */
+  const { plant: activePlant, module: activeModule } = parseTab(tab);
+  const scopeCodes = useMemo(
+    () => (activePlant && allowedPlants.includes(activePlant)) ? [activePlant] : allowedPlants,
+    [activePlant, allowedPlants]
+  );
+  const scopedFunds = useMemo(() => visibleFunds.filter((f) => scopeCodes.includes(f.branchCode)), [visibleFunds, scopeCodes]);
+  const scopedRequests = useMemo(() => visibleRequests.filter((r) => scopeCodes.includes(r.branchCode)), [visibleRequests, scopeCodes]);
+  const scopedDisbursements = useMemo(() => visibleDisbursements.filter((d) => scopeCodes.includes(d.branchCode)), [visibleDisbursements, scopeCodes]);
+  const scopedReplenishments = useMemo(() => visibleReplenishments.filter((r) => scopeCodes.includes(r.branchCode)), [visibleReplenishments, scopeCodes]);
+  const scopedLiquidations = useMemo(() => {
+    const ids = new Set(scopedDisbursements.map((d) => d.id));
+    return visibleLiquidations.filter((l) => ids.has(l.disbursementId));
+  }, [visibleLiquidations, scopedDisbursements]);
+  /* Plant selector options limited to the active tab's plant so module forms
+     default to the correct plant and the redundant in-page selector hides. */
+  const scopedPlantOptions = useMemo(
+    () => plantOptions.filter((p) => scopeCodes.includes(p.code)),
+    [plantOptions, scopeCodes]
+  );
+  const activePlantLabel = activePlant ? plantLabel(activePlant) : "";
+  const activeBranch = useMemo(() => DASHBOARD_BRANCHES.find((b) => b.branchCode === activePlant) || null, [activePlant]);
 
   /* ---- Roles, navigation & notifications ---- */
-  const allowedTabs = (ROLES[role] || ROLES["Accounting"]).tabs;
-  const navItems = useMemo(() => NAV_ITEMS.filter((it) => allowedTabs.includes(it.key)), [allowedTabs]);
+  const roleModuleKeys = (ROLES[role] || ROLES["Accounting"]).tabs;
+  /* User's plants in the canonical PLANTS order. */
+  const orderedPlants = useMemo(() => PLANTS.filter((p) => allowedPlants.includes(p.code)), [allowedPlants]);
 
-  /* Keep the active tab valid whenever the role (and its allowed tabs) changes. */
+  /* Build the grouped sidebar: an optional consolidated overview, one group per
+     plant with that plant's modules, then the shared administration tabs. */
+  const navGroups = useMemo(() => {
+    const groups = [];
+    const plantMods = PLANT_MODULES.filter((m) => roleModuleKeys.includes(m.key));
+    if (orderedPlants.length > 1 && roleModuleKeys.includes("dashboard")) {
+      groups.push({ key: "overview", label: "Overview", items: [
+        { tabKey: "dashboard", label: "Consolidated Dashboard", icon: LayoutDashboard },
+      ] });
+    }
+    orderedPlants.forEach((p) => {
+      groups.push({
+        key: "plant-" + p.code,
+        label: p.label,
+        items: plantMods.map((m) => ({ tabKey: plantTabKey(p.code, m.key), label: m.label, icon: m.icon })),
+      });
+    });
+    const globalMods = GLOBAL_MODULES.filter((m) => roleModuleKeys.includes(m.key));
+    if (globalMods.length) {
+      groups.push({ key: "admin", label: "Administration", items: globalMods.map((m) => ({ tabKey: m.key, label: m.label, icon: m.icon })) });
+    }
+    return groups;
+  }, [roleModuleKeys, orderedPlants]);
+
+  /* Flat set of every valid tab key for this user — used to block navigation to
+     unauthorized pages, including manual URL/state tampering. */
+  const allowedTabs = useMemo(() => {
+    const set = new Set();
+    navGroups.forEach((g) => g.items.forEach((it) => set.add(it.tabKey)));
+    return set;
+  }, [navGroups]);
+  const firstTab = (navGroups[0] && navGroups[0].items[0]) ? navGroups[0].items[0].tabKey : "dashboard";
+
+  /* Keep the active tab valid whenever role/plants change. */
   useEffect(() => {
-    if (loaded && !allowedTabs.includes(tab)) setTab(allowedTabs[0] || "dashboard");
-  }, [role, loaded]); // eslint-disable-line
+    if (loaded && !allowedTabs.has(tab)) setTab(firstTab);
+  }, [role, loaded, allowedTabs]); // eslint-disable-line
 
   const navigate = useCallback((key, opts) => {
-    if (!allowedTabs.includes(key)) return;
-    if (key === "history") setHistoryFilter(opts && opts.type ? { type: opts.type } : null);
-    setTab(key);
-  }, [allowedTabs]);
+    /* Accept a bare module key from dashboard drill-downs and scope it to the
+       plant currently in context (or the first allowed plant). */
+    let target = key;
+    if (!String(key).includes(TAB_SEP) && PLANT_MODULE_KEYS.includes(key)) {
+      const cur = parseTab(tab).plant || (orderedPlants[0] && orderedPlants[0].code);
+      if (cur) target = plantTabKey(cur, key);
+    }
+    if (!allowedTabs.has(target)) return;
+    if (parseTab(target).module === "history") setHistoryFilter(opts && opts.type ? { type: opts.type } : null);
+    setTab(target);
+  }, [allowedTabs, tab, orderedPlants]);
 
   const notifications = useMemo(
     () => buildNotifications(visibleRequests, visibleDisbursements, visibleLiquidations, visibleReplenishments),
@@ -4101,114 +4203,108 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     <AppUI.Provider value={uiValue}>
     <div className="pcp-root">
       <style>{CSS}</style>
-      <Sidebar tab={tab} setTab={setTab} role={role} navItems={navItems} userEmail={userEmail} userName={userName} onSignOut={handleSignOut} onChangePassword={() => setShowChangePw(true)} />
+      <Sidebar tab={tab} setTab={setTab} role={role} navGroups={navGroups} userEmail={userEmail} userName={userName} onSignOut={handleSignOut} onChangePassword={() => setShowChangePw(true)} />
       <div className="pcp-main">
-        {tab === "dashboard" && (
-          <>
-            <TopBar
-              title={showConsolidated ? "Dashboard" : (dashBranches[0] ? dashBranches[0].label + " Dashboard" : "Dashboard")}
-              sub="Real-time summary of petty cash activity across your assigned plants"
-              right={<button className="pcp-btn" onClick={() => setShowEditBalances(true)}><Edit3 size={14} /> Edit Beginning Balances</button>}
-            />
-            <div className="pcp-content">
-              {(showConsolidated || dashBranches.length > 1) && (
-                <div className="pcp-tabs">
-                  {showConsolidated && (
-                    <button
-                      className={"pcp-tab" + (dashboardBranch === "ALL" ? " active" : "")}
-                      onClick={() => setDashboardBranch("ALL")}
-                    >
-                      Consolidated
-                    </button>
-                  )}
-                  {dashBranches.map((b) => (
-                    <button
-                      key={b.key}
-                      className={"pcp-tab" + (dashboardBranch === b.key ? " active" : "")}
-                      onClick={() => setDashboardBranch(b.key)}
-                    >
-                      {b.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {dashboardBranch === "ALL" ? (
-                <Dashboard funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements} liquidations={visibleLiquidations} replenishments={visibleReplenishments} onNavigate={navigate} />
-              ) : (
-                (() => {
-                  const b = dashBranches.find((x) => x.key === dashboardBranch) || dashBranches[0];
-                  if (!b) return <div className="pcp-empty">No plant assigned.</div>;
-                  return (
-                    <BranchDashboard
-                      label={b.label}
-                      branchCode={b.branchCode}
-                      funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements} liquidations={visibleLiquidations} replenishments={visibleReplenishments}
-                      onNavigate={navigate}
-                    />
-                  );
-                })()
-              )}
-            </div>
-          </>
+        {activeModule === "dashboard" && (
+          activePlant && activeBranch ? (
+            <>
+              <TopBar
+                title={activeBranch.label + " Dashboard"}
+                sub={"Real-time summary of petty cash activity for " + activeBranch.label}
+                right={<button className="pcp-btn" onClick={() => setShowEditBalances(true)}><Edit3 size={14} /> Edit Beginning Balances</button>}
+              />
+              <div className="pcp-content">
+                <BranchDashboard
+                  label={activeBranch.label}
+                  branchCode={activeBranch.branchCode}
+                  funds={scopedFunds} requests={scopedRequests} disbursements={scopedDisbursements} liquidations={scopedLiquidations} replenishments={scopedReplenishments}
+                  onNavigate={navigate}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <TopBar
+                title="Consolidated Dashboard"
+                sub="Real-time summary of petty cash activity across your assigned plants"
+                right={<button className="pcp-btn" onClick={() => setShowEditBalances(true)}><Edit3 size={14} /> Edit Beginning Balances</button>}
+              />
+              <div className="pcp-content">
+                <Dashboard funds={scopedFunds} requests={scopedRequests} disbursements={scopedDisbursements} liquidations={scopedLiquidations} replenishments={scopedReplenishments} onNavigate={navigate} />
+              </div>
+            </>
+          )
         )}
-        {tab === "requests" && (
+        {activeModule === "requests" && (
           <RequestsTab
-            requests={visibleRequests} funds={visibleFunds}
+            key={tab}
+            requests={scopedRequests} funds={scopedFunds}
             onCreate={addRequest} onEdit={editRequest}
             onApprove={approveRequest} onReject={rejectRequest}
             onDisburse={(req) => setDisburseTarget(req)}
-            plantOptions={plantOptions} canApprove={canApprove} canRelease={canRelease}
+            plantOptions={scopedPlantOptions} canApprove={canApprove} canRelease={canRelease}
+            plantTitle={activePlantLabel}
           />
         )}
-        {tab === "disbursements" && (
+        {activeModule === "disbursements" && (
           <DisbursementsTab
-            disbursements={visibleDisbursements} liquidations={visibleLiquidations} requests={visibleRequests}
+            key={tab}
+            disbursements={scopedDisbursements} liquidations={scopedLiquidations} requests={scopedRequests}
             onUpdateRemarks={updateRemarks} onToggleBilled={toggleBilled} onEditDisbursement={editDisbursement}
-            plantOptions={plantOptions}
+            plantOptions={scopedPlantOptions}
+            plantTitle={activePlantLabel}
           />
         )}
-        {tab === "liquidation" && (
+        {activeModule === "liquidation" && (
           <LiquidationTab
-            disbursements={visibleDisbursements} liquidations={visibleLiquidations}
+            key={tab}
+            disbursements={scopedDisbursements} liquidations={scopedLiquidations}
             onSaveLiquidation={saveLiquidation} onExport={exportLiquidation}
             onExportAll={exportAllToAcumatica}
-            plantOptions={plantOptions}
+            plantOptions={scopedPlantOptions}
+            plantTitle={activePlantLabel}
           />
         )}
-        {tab === "replenishment" && (
+        {activeModule === "replenishment" && (
           <ReplenishmentTab
-            replenishments={visibleReplenishments} funds={visibleFunds}
-            disbursements={visibleDisbursements} liquidations={visibleLiquidations}
+            key={tab}
+            replenishments={scopedReplenishments} funds={scopedFunds}
+            disbursements={scopedDisbursements} liquidations={scopedLiquidations}
             onCreate={addReplenishment} onEdit={editReplenishment}
             onComplete={completeReplenishment} onDelete={deleteReplenishment}
-            plantOptions={plantOptions} canEdit={canEdit}
+            plantOptions={scopedPlantOptions} canEdit={canEdit}
+            plantTitle={activePlantLabel}
           />
         )}
-        {tab === "history" && (
+        {activeModule === "history" && (
           <TransactionHistoryTab
-            requests={visibleRequests} disbursements={visibleDisbursements}
-            liquidations={visibleLiquidations} replenishments={visibleReplenishments}
-            initialFilter={historyFilter} plantOptions={plantOptions}
+            key={tab}
+            requests={scopedRequests} disbursements={scopedDisbursements}
+            liquidations={scopedLiquidations} replenishments={scopedReplenishments}
+            initialFilter={historyFilter} plantOptions={scopedPlantOptions}
+            plantTitle={activePlantLabel}
           />
         )}
-        {tab === "report" && (
+        {activeModule === "report" && (
           <ManagementReportTab
-            funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements} liquidations={visibleLiquidations} replenishments={visibleReplenishments}
+            key={tab}
+            funds={scopedFunds} requests={scopedRequests} disbursements={scopedDisbursements} liquidations={scopedLiquidations} replenishments={scopedReplenishments}
+            plantTitle={activePlantLabel}
           />
         )}
-        {tab === "audit" && (
+        {activeModule === "audit" && (
           <AuditTrailTab auditLog={auditLog} />
         )}
-        {tab === "masterdata" && (
+        {activeModule === "masterdata" && (
           <MasterDataTab
             funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
             onAddFund={addFund} onEditFund={editFund} onDeleteFund={deleteFund}
           />
         )}
-        {tab === "users" && (
+        {activeModule === "users" && (
           <UserManagementTab currentEmail={userEmail} onChangePassword={() => setShowChangePw(true)} />
         )}
-        {tab === "settings" && (
+        {activeModule === "settings" && (
           <SystemSettingsTab userName={userName} userEmail={userEmail} role={role} plants={allowedPlants} />
         )}
       </div>
