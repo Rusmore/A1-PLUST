@@ -50,16 +50,24 @@
   window.PCP_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5aXpsdWJhanFvdHRrYWRwaWJrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzNzU3MjIsImV4cCI6MjA5OTk1MTcyMn0.Ay8K-2qy0INM8OAsbBigTP2I42dl0-oc6X3s_rKBKAM";
   window.PCP_TABLE = "pcp_state";
 
-  /* ---- Access control ----
-     Admin accounts get FULL "super" access (every tab) and can view the
-     system as any role. Everyone else is locked to a restricted role and
-     cannot switch. Match by full email or by the username part before "@",
-     case-insensitive. Create these same accounts in Supabase > Authentication. */
-  window.PCP_ADMIN_EMAILS = ["a1plusadmin@a1plus.com"];   // full super access
-  window.PCP_DEFAULT_ROLE = "Requestor";  // role for any signed-in user not listed below
-  window.PCP_USER_ROLES = {               // optional: pin specific users to a role
-    "a1plususer1@a1plus.com": "Finance Manager",
-    "a1plususer2@a1plus.com": "Accounting",
+  /* ---- Access control (Role-Based Access Control) ----
+     Each account below is matched by full email (case-insensitive). "Accounting"
+     is the full super-admin. Plant access limits which plants a user can see:
+       "ALL"            = every plant (Accounting, Finance)
+       ["D1","RG"]      = Disney + RG and Co. (Pura Barloso)
+       ["WARNER"]       = Warner only (Angelita Bayani)
+       ["A1+"]          = Manila only (Maureen Felix)
+     Create these SAME accounts (email + password) in Supabase > Authentication
+     > Users. To reset a password, use the Supabase dashboard; each user can also
+     change their own password from the app sidebar. */
+  window.PCP_ADMIN_EMAILS = ["accounting@a1plus.com"];   // full super access
+  window.PCP_DEFAULT_ROLE = "Custodian";                 // fallback for unlisted signed-in users
+  window.PCP_USERS = {
+    "accounting@a1plus.com": { name: "Accounting Department", role: "Accounting", plants: "ALL" },
+    "finance@a1plus.com":    { name: "Finance Department",    role: "Finance",    plants: "ALL" },
+    "puradr@a1plus.com":     { name: "Pura Barloso",          role: "Custodian",  plants: ["D1", "RG"] },
+    "lita@a1plus.com":       { name: "Angelita Bayani",       role: "Custodian",  plants: ["WARNER"] },
+    "mauwi@a1plus.com":      { name: "Maureen Felix",         role: "Custodian",  plants: ["A1+"] },
   };
 
   /* ---- Built-in login (fallback only) ----
@@ -113,6 +121,12 @@
           return c.auth.resetPasswordForEmail(email, { redirectTo: window.location.href });
         });
       },
+      updatePassword: function (newPassword) {
+        return sbReady.then(function (c) {
+          if (!c) return { error: { message: "Cloud database not configured." } };
+          return c.auth.updateUser({ password: newPassword });
+        });
+      },
       signOut: function () { return sbReady.then(function (c) { return c ? c.auth.signOut() : null; }); },
       onChange: function (cb) { sbReady.then(function (c) { if (c) c.auth.onAuthStateChange(function (_e, session) { cb(session); }); }); }
     };
@@ -152,6 +166,6 @@
 
 <!-- The portal itself, transpiled in the browser by Babel.
      Bump the ?v= number whenever you deploy a change so browsers reload it. -->
-<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx?v=20260718f"></script>
+<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx?v=20260722a"></script>
 </body>
 </html>

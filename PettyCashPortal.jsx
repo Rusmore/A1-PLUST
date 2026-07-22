@@ -5,7 +5,8 @@ import {
   Check, X, Search, AlertTriangle, TrendingUp, Users, Building2, Trash2,
   Edit3, ChevronRight, Banknote, ClipboardList, PiggyBank, CircleDollarSign,
   ArrowUpRight, ArrowDownRight, FileSpreadsheet, RefreshCw, Filter as FilterIcon,
-  Printer, Bell, History, ShieldCheck, ArrowLeftRight, Clock, UserCog, Landmark, LogOut
+  Printer, Bell, History, ShieldCheck, ArrowLeftRight, Clock, UserCog, Landmark, LogOut,
+  Settings, KeyRound
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -59,62 +60,26 @@ const seedFunds = () => ([
   { id: "fund-MNL", branchCode: "A1+", label: "Manila", custodian: "Maureen Felix", beginningBalance: 600000 },
   { id: "fund-DIS", branchCode: "D1", label: "Disney", custodian: "Pura Barloso", beginningBalance: 704035.23 },
   { id: "fund-WAR", branchCode: "WARNER", label: "Warner", custodian: "Angelita Bayani", beginningBalance: 150000 },
+  { id: "fund-RG", branchCode: "RG", label: "RG and Co.", custodian: "Pura Barloso", beginningBalance: 300000 },
 ]);
 
-const seedRequests = () => ([
-  {
-    id: "req-1001", requestNo: "PCR-2026-0001", date: "2026-07-08",
-    employee: "Juan Dela Cruz", department: "000-00003", branchCode: "WARNER",
-    purpose: "Field sales trip — client meals and local transportation",
-    amount: 5000, approver: "Angelita Bayani", status: "Disbursed",
-    approvals: {
-      "Manager": { status: "Approved", by: "Angelita Bayani", date: "2026-07-08" },
-      "Director": { status: "Approved", by: "Director", date: "2026-07-08" },
-      "Ma'am Grace": { status: "Approved", by: "Grace", date: "2026-07-08" },
-      "Boss RTC": { status: "Approved", by: "RTC", date: "2026-07-08" },
-    },
-  },
-]);
+/* Transaction stores start EMPTY — the system begins with a clean database and
+   only master data (plants, users, chart of accounts) is pre-seeded. */
+const seedRequests = () => ([]);
 
-const seedDisbursements = () => ([
-  {
-    id: "dv-1001", voucherNo: "PCV-2026-0001", date: "2026-07-09", requestId: "req-1001",
-    employee: "Juan Dela Cruz", branchCode: "WARNER", department: "000-00003",
-    expenseCategory: "OE Transportation and travel", amount: 5000,
-    status: "Closed", remarks: "Sales trip advance", billed: false,
-  },
-]);
+const seedDisbursements = () => ([]);
 
-const seedLiquidations = () => ([
-  {
-    id: "liq-1001", disbursementId: "dv-1001", createdDate: "2026-07-10",
-    lines: [
-      { id: "ln-1", date: "2026-07-10", expense: "Meals", category: "OE Meal Allowance", department: "000-00003", amount: 1200 },
-      { id: "ln-2", date: "2026-07-10", expense: "Fuel", category: "OE Oil & Gasoline", department: "000-00008", amount: 2000 },
-      { id: "ln-3", date: "2026-07-10", expense: "Toll Fee", category: "OE Toll Fee", department: "000-00008", amount: 300 },
-      { id: "ln-4", date: "2026-07-10", expense: "Office Supplies", category: "OE Office Supplies", department: "000-00009", amount: 700 },
-    ],
-  },
-]);
+const seedLiquidations = () => ([]);
 
-const seedReplenishments = () => ([
-  {
-    id: "rep-1001", replenishmentNo: "PCRP-2026-0001", date: "2026-07-12",
-    branchCode: "WARNER", amount: 4200, preparedBy: "Angelita Bayani",
-    approvedBy: "Grace", checkNo: "CHK-88213", method: "Check",
-    status: "Completed", remarks: "Reimburse liquidated Warner expenses",
-  },
-]);
+const seedReplenishments = () => ([]);
 
-const seedAuditLog = () => ([
-  { id: "aud-1", ts: "2026-07-08T09:12:00", user: "Requestor", action: "Request Created", entity: "PCR-2026-0001", remarks: "Field sales trip advance ₱5,000.00" },
-  { id: "aud-2", ts: "2026-07-08T10:05:00", user: "Department Head", action: "Approved", entity: "PCR-2026-0001", remarks: "All 4 levels approved" },
-  { id: "aud-3", ts: "2026-07-09T08:30:00", user: "Cashier", action: "Released", entity: "PCV-2026-0001", remarks: "Cash released to Juan Dela Cruz" },
-  { id: "aud-4", ts: "2026-07-10T14:20:00", user: "Accounting", action: "Liquidated", entity: "PCV-2026-0001", remarks: "4 receipts itemized" },
-  { id: "aud-5", ts: "2026-07-12T11:00:00", user: "Finance Manager", action: "Replenished", entity: "PCRP-2026-0001", remarks: "Check CHK-88213 · ₱4,200.00" },
-]);
+const seedAuditLog = () => ([]);
 
 const STORAGE_KEY = "petty-cash-portal-state";
+/* Bump this whenever transaction data must be wiped for a clean start on
+   already-deployed databases. Loading a state with an older version keeps the
+   master data (funds) but clears all recorded transactions. */
+const DATA_VERSION = "2026-clean-1";
 
 async function loadState() {
   try {
@@ -392,6 +357,11 @@ const BRANCHES = [
     "code": "STINDUSTRY",
     "name": "Starkson Industries Inc.",
     "company": "Starkson Industries Inc."
+  },
+  {
+    "code": "RG",
+    "name": "RG and Co.",
+    "company": "RG and Co."
   }
 ];
 
@@ -399,8 +369,22 @@ const COMPANIES = [
   "A1+ Paper and Plastic Inc.",
   "Starkson Paper and Plastic Corporation",
   "Happy Alliance Mono Film, Inc.",
-  "Starkson Industries Inc."
+  "Starkson Industries Inc.",
+  "RG and Co."
 ];
+
+/* The four operating petty-cash plants used for plant-scoped access control,
+   per-plant dashboards, and the plant selector shown inside each module. */
+const PLANTS = [
+  { key: "MNL", code: "A1+", label: "Manila", custodian: "Maureen Felix" },
+  { key: "WARNER", code: "WARNER", label: "Warner", custodian: "Angelita Bayani" },
+  { key: "DISNEY", code: "D1", label: "Disney", custodian: "Pura Barloso" },
+  { key: "RG", code: "RG", label: "RG and Co.", custodian: "Pura Barloso" },
+];
+const PLANT_CODES = PLANTS.map((p) => p.code);
+const plantLabel = (code) => (PLANTS.find((p) => p.code === code) || {}).label || code;
+/* Resolve a user's allowed plant list ("ALL" -> every plant code). */
+const resolvePlants = (plants) => (plants === "ALL" || !plants) ? PLANT_CODES.slice() : plants.filter((c) => PLANT_CODES.includes(c));
 
 const SUBACCOUNTS = [
   {
@@ -1007,66 +991,36 @@ const taxCategoryLabel = (code) => {
   return t ? `${t.code} — ${t.desc}` : code;
 };
 
-/* ---- Approval matrix ---- */
-const APPROVAL_LEVELS = ["Manager", "Director", "Ma'am Grace", "Boss RTC"];
-
-function defaultApprovals() {
-  const o = {};
-  APPROVAL_LEVELS.forEach((lvl) => { o[lvl] = { status: "Pending", by: "", date: "" }; });
-  return o;
-}
-
-function normalizeApprovals(ap) {
-  const base = defaultApprovals();
-  if (ap && typeof ap === "object") {
-    APPROVAL_LEVELS.forEach((lvl) => {
-      if (ap[lvl]) base[lvl] = { status: ap[lvl].status || "Pending", by: ap[lvl].by || "", date: ap[lvl].date || "" };
-    });
-  }
-  return base;
-}
-
-/* Overall approval verdict derived from the four levels. */
-function overallApprovalStatus(approvals) {
-  const ap = normalizeApprovals(approvals);
-  const states = APPROVAL_LEVELS.map((lvl) => ap[lvl].status);
-  if (states.includes("Rejected")) return "Rejected";
-  if (states.every((s) => s === "Approved")) return "Approved";
-  return "Pending";
-}
-
-function approvedCount(approvals) {
-  const ap = normalizeApprovals(approvals);
-  return APPROVAL_LEVELS.filter((lvl) => ap[lvl].status === "Approved").length;
-}
-
 /* ============================= USER ROLES ============================= */
 
-/* Each role only sees the nav tabs relevant to it. Administrator sees everything. */
+/* Each role only sees the nav tabs relevant to it. Plant-level data access is
+   controlled separately (per user) so a custodian only sees their own plants. */
 const ROLES = {
-  "Administrator":     { label: "Administrator",     tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata"] },
-  "Requestor":         { label: "Requestor",         tabs: ["dashboard", "requests", "history"] },
-  "Department Head":   { label: "Department Head",   tabs: ["dashboard", "requests", "history", "report"] },
-  "Cashier":           { label: "Cashier",           tabs: ["dashboard", "requests", "disbursements", "liquidation", "history"] },
-  "Accounting":        { label: "Accounting",        tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata"] },
-  "Finance Manager":   { label: "Finance Manager",   tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit"] },
+  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata", "users", "settings"] },
+  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata"] },
+  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report"] },
 };
 const ROLE_NAMES = Object.keys(ROLES);
 
-/* Decide a signed-in user's role and admin status from the config in index.html.
-   Admins get full super access and can view-as any role; everyone else is
-   locked to a single restricted role. In local (no-auth) mode, the operator
-   is treated as an admin so the tool stays fully usable offline. */
+/* Decide a signed-in user's role, admin status and plant scope from the config
+   in index.html (window.PCP_USERS). Accounting is the full super-admin. In
+   local (no-auth) mode the operator is treated as Accounting super-admin so the
+   tool stays fully usable offline. */
 function resolveUserAccess(email) {
-  if (!email) return { role: "Administrator", isAdmin: true }; // local / no-auth mode
+  if (!email) return { role: "Accounting", isAdmin: true, plants: "ALL", name: "Administrator" };
+  const users = window.PCP_USERS || {};
   const admins = (window.PCP_ADMIN_EMAILS || []).map((s) => String(s).toLowerCase());
-  const map = window.PCP_USER_ROLES || {};
-  const fallback = (window.PCP_DEFAULT_ROLE && ROLES[window.PCP_DEFAULT_ROLE]) ? window.PCP_DEFAULT_ROLE : "Requestor";
   const e = String(email).toLowerCase();
   const username = e.split("@")[0];
-  if (admins.includes(e) || admins.includes(username)) return { role: "Administrator", isAdmin: true };
-  const mapped = map[e] || map[username];
-  return { role: (mapped && ROLES[mapped]) ? mapped : fallback, isAdmin: false };
+  const u = users[e] || users[username];
+  if (u) {
+    const role = ROLES[u.role] ? u.role : "Custodian";
+    const isAdmin = role === "Accounting" || admins.includes(e) || admins.includes(username);
+    return { role, isAdmin, plants: u.plants || "ALL", name: u.name || email };
+  }
+  if (admins.includes(e) || admins.includes(username)) return { role: "Accounting", isAdmin: true, plants: "ALL", name: email };
+  const fb = (window.PCP_DEFAULT_ROLE && ROLES[window.PCP_DEFAULT_ROLE]) ? window.PCP_DEFAULT_ROLE : "Custodian";
+  return { role: fb, isAdmin: false, plants: [], name: email };
 }
 
 /* Build the notification feed derived from current state — approvals awaiting
@@ -1518,6 +1472,8 @@ const CSS = `
   }
   .pcp-flow-step { flex: 1; padding: 16px 20px; position: relative; color: #fff; }
   .pcp-flow-step + .pcp-flow-step { border-left: 1px solid rgba(255,255,255,0.12); }
+  .pcp-flow-click { cursor: pointer; transition: background 0.12s; }
+  .pcp-flow-click:hover { background: rgba(255,255,255,0.08); }
   .pcp-flow-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px; color: #9098b3; font-weight: 700; }
   .pcp-flow-value { font-size: 19px; font-weight: 700; margin-top: 6px; }
   .pcp-flow-arrow { position: absolute; right: -11px; top: 50%; transform: translateY(-50%); z-index: 2; color: #676f8c; }
@@ -1579,6 +1535,9 @@ const CSS = `
     display: flex; align-items: center; gap: 6px; padding: 7px 10px; margin: 0 6px 10px 6px;
     background: rgba(255,255,255,0.06); border-radius: 8px; color: #cfd3e0; font-size: 11.5px; font-weight: 600;
   }
+  .pcp-user-card { padding: 8px 10px; margin: 0 6px 8px 6px; background: rgba(255,255,255,0.06); border-radius: 8px; }
+  .pcp-user-name { color: #fff; font-size: 12.5px; font-weight: 700; }
+  .pcp-user-card .pcp-role-badge { margin: 4px 0 0 0; }
   .pcp-user-row {
     display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 10px; margin: 0 6px 10px 6px;
     background: rgba(255,255,255,0.04); border-radius: 8px;
@@ -1638,9 +1597,11 @@ const NAV_ITEMS = [
   { key: "report", label: "Reports", icon: FileText },
   { key: "audit", label: "Audit Trail", icon: ShieldCheck },
   { key: "masterdata", label: "Funds & Master Data", icon: Database },
+  { key: "users", label: "User Management", icon: UserCog },
+  { key: "settings", label: "System Settings", icon: Settings },
 ];
 
-function Sidebar({ tab, setTab, role, navItems, userEmail, onSignOut }) {
+function Sidebar({ tab, setTab, role, navItems, userEmail, userName, onSignOut, onChangePassword }) {
   const items = navItems || NAV_ITEMS;
   return (
     <aside className="pcp-sidebar">
@@ -1667,9 +1628,10 @@ function Sidebar({ tab, setTab, role, navItems, userEmail, onSignOut }) {
         })}
       </nav>
       <div className="pcp-sidebar-foot">
-        {role && (
-          <div className="pcp-role-badge" title="Signed-in role">
-            <UserCog size={13} /> <span>{role}</span>
+        {(userName || role) && (
+          <div className="pcp-user-card" title="Signed-in user">
+            {userName && <div className="pcp-user-name">{userName}</div>}
+            {role && <div className="pcp-role-badge" style={{ marginTop: 4 }}><UserCog size={13} /> <span>{ROLES[role] ? ROLES[role].label : role}</span></div>}
           </div>
         )}
         {userEmail && (
@@ -1679,6 +1641,11 @@ function Sidebar({ tab, setTab, role, navItems, userEmail, onSignOut }) {
               <LogOut size={13} />
             </button>
           </div>
+        )}
+        {onChangePassword && (
+          <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" style={{ color: "#cfd3e0", width: "100%", justifyContent: "flex-start", marginTop: 2 }} onClick={onChangePassword} title="Change your password">
+            <KeyRound size={13} /> Change Password
+          </button>
         )}
         <div className="pcp-logos-strip">
           <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
@@ -1806,6 +1773,21 @@ function KpiCard({ label, value, icon: Icon, tint, foot, onClick }) {
   );
 }
 
+/* Per-plant tab bar shown at the top of each module so users with more than one
+   plant (Accounting, Finance, Pura Barloso) can view a single plant at a time —
+   effectively a separate module per plant. Hidden when only one plant applies. */
+function PlantScopeTabs({ plants, value, onChange }) {
+  if (!plants || plants.length <= 1) return null;
+  return (
+    <div className="pcp-tabs" style={{ marginBottom: 14 }}>
+      <button className={"pcp-tab" + (value === "ALL" ? " active" : "")} onClick={() => onChange("ALL")}>All Plants</button>
+      {plants.map((p) => (
+        <button key={p.code} className={"pcp-tab" + (value === p.code ? " active" : "")} onClick={() => onChange(p.code)}>{p.label}</button>
+      ))}
+    </div>
+  );
+}
+
 function groupSum(items, keyFn, valFn) {
   const map = new Map();
   items.forEach((it) => {
@@ -1843,6 +1825,7 @@ const DASHBOARD_BRANCHES = [
   { key: "MNL", label: "Manila", branchCode: "A1+" },
   { key: "WARNER", label: "Warner", branchCode: "WARNER" },
   { key: "DISNEY", label: "Disney", branchCode: "D1" },
+  { key: "RG", label: "RG and Co.", branchCode: "RG" },
 ];
 
 function Dashboard({ funds, requests, disbursements, liquidations, replenishments, onNavigate }) {
@@ -1888,22 +1871,22 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
   return (
     <div>
       <div className="pcp-flow">
-        <div className="pcp-flow-step">
-          <div className="pcp-flow-label">Beginning Balance</div>
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
+          <div className="pcp-flow-label">Total Fund (Beginning Balance)</div>
           <div className="pcp-flow-value pcp-num">{peso(m.totalFund)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("disbursements")}>
           <div className="pcp-flow-label">Total Disbursed</div>
           <div className="pcp-flow-value pcp-num">{peso(m.totalDisbursed)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("liquidation")}>
           <div className="pcp-flow-label">Total Liquidated</div>
           <div className="pcp-flow-value pcp-num">{peso(m.totalLiquidated)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
           <div className="pcp-flow-label">Available Balance</div>
           <div className="pcp-flow-value pcp-num" style={{ color: m.availableBalance < 0 ? "#ff8080" : "#8fffb0" }}>
             {peso(m.availableBalance)}
@@ -1914,7 +1897,8 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
       <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
         <KpiCard label="Current Petty Cash Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
           tint={m.availableBalance < 0 ? "#c8102e" : "#15803d"}
-          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand across custodians"} />
+          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand across custodians"}
+          onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
         <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
         <KpiCard label="Approved Requests" value={m.approvedRequests} icon={Check} tint="#2054a3" foot="Ready for release" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
         <KpiCard label="Pending Liquidations" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
@@ -1922,7 +1906,7 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
         <KpiCard label="Monthly Expenses" value={peso(m.monthlyExpenses)} icon={TrendingUp} tint="#c8102e" foot="Liquidated this month" onClick={onNavigate ? () => onNavigate("history") : undefined} />
         <KpiCard label="Active Petty Cash Funds" value={funds.length + " Funds"} icon={PiggyBank} tint="#7c3aed" foot="Across all plants" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
         <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" foot="Released to date" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
-        <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#15803d" />
+        <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#15803d" onClick={onNavigate ? () => onNavigate("history") : undefined} />
       </div>
 
       <div className="pcp-grid-2" style={{ marginBottom: 16 }}>
@@ -2033,7 +2017,7 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
 /* Single-branch dashboard (Manila / Warner / Disney) — same KPI set as the
    consolidated view, scoped to one branch's funds, requests, disbursements
    and liquidations. */
-function BranchDashboard({ label, branchCode, funds, requests, disbursements, liquidations, replenishments }) {
+function BranchDashboard({ label, branchCode, funds, requests, disbursements, liquidations, replenishments, onNavigate }) {
   const fundsForBranch = useMemo(() => funds.filter((f) => f.branchCode === branchCode), [funds, branchCode]);
   const requestsForBranch = useMemo(() => requests.filter((r) => r.branchCode === branchCode), [requests, branchCode]);
   const disbForBranch = useMemo(() => disbursements.filter((d) => d.branchCode === branchCode), [disbursements, branchCode]);
@@ -2056,22 +2040,22 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
   return (
     <div>
       <div className="pcp-flow">
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
           <div className="pcp-flow-label">Beginning Balance</div>
           <div className="pcp-flow-value pcp-num">{peso(m.totalFund)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("disbursements")}>
           <div className="pcp-flow-label">Total Disbursed</div>
           <div className="pcp-flow-value pcp-num">{peso(m.totalDisbursed)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("liquidation")}>
           <div className="pcp-flow-label">Total Liquidated</div>
           <div className="pcp-flow-value pcp-num">{peso(m.totalLiquidated)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step">
+        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
           <div className="pcp-flow-label">Available Balance</div>
           <div className="pcp-flow-value pcp-num" style={{ color: m.availableBalance < 0 ? "#ff8080" : "#8fffb0" }}>
             {peso(m.availableBalance)}
@@ -2086,16 +2070,17 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
       )}
 
       <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" />
-        <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" />
-        <KpiCard label="Total Liquidated" value={peso(m.totalLiquidated)} icon={ArrowDownRight} tint="#15803d" />
+        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
+        <KpiCard label="Total Liquidated" value={peso(m.totalLiquidated)} icon={ArrowDownRight} tint="#15803d" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
         <KpiCard label="Available Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
           tint={m.availableBalance < 0 ? "#c8102e" : "#15803d"}
-          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand"} />
-        <KpiCard label="Completed & Billed" value={m.completedBilled} icon={Check} tint="#15803d" foot="Exported to Acumatica" />
-        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" />
-        <KpiCard label="Pending Liquidation" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" />
-        <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#7c3aed" />
+          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand"}
+          onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Completed & Billed" value={m.completedBilled} icon={Check} tint="#15803d" foot="Exported to Acumatica" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
+        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
+        <KpiCard label="Pending Liquidation" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
+        <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#7c3aed" onClick={onNavigate ? () => onNavigate("history") : undefined} />
       </div>
 
       <div className="pcp-card pcp-card-pad" style={{ marginTop: 16 }}>
@@ -2121,8 +2106,9 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
 }
 /* ============================= REQUESTS ============================= */
 
-function RequestFormModal({ onClose, onSave, nextRequestNo, request }) {
+function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOptions }) {
   const isEdit = !!request;
+  const defaultBranch = (plantOptions && plantOptions[0]) ? plantOptions[0].code : BRANCHES[0].code;
   const [form, setForm] = useState(
     request
       ? {
@@ -2132,7 +2118,7 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request }) {
         }
       : {
           date: todayISO(), employee: "", department: SUBACCOUNTS[1].code,
-          branchCode: BRANCHES[0].code, purpose: "", amount: "", approver: "",
+          branchCode: defaultBranch, purpose: "", amount: "", approver: "",
         }
   );
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -2168,13 +2154,17 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request }) {
           </div>
           <div className="pcp-field-row">
             <div className="pcp-field">
-              <label>Company / Branch</label>
+              <label>Plant / Branch</label>
               <select className="pcp-select" value={form.branchCode} onChange={(e) => set("branchCode", e.target.value)}>
-                {COMPANIES.map((c) => (
-                  <optgroup label={c} key={c}>
-                    {branchesForCompany(c).map((b) => <option key={b.code} value={b.code}>{b.name} ({b.code})</option>)}
-                  </optgroup>
-                ))}
+                {plantOptions ? (
+                  plantOptions.map((p) => <option key={p.code} value={p.code}>{p.label} ({p.code})</option>)
+                ) : (
+                  COMPANIES.map((c) => (
+                    <optgroup label={c} key={c}>
+                      {branchesForCompany(c).map((b) => <option key={b.code} value={b.code}>{b.name} ({b.code})</option>)}
+                    </optgroup>
+                  ))
+                )}
               </select>
             </div>
             <div className="pcp-field">
@@ -2202,92 +2192,35 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request }) {
   );
 }
 
-/* Four-level approval chain: Manager → Director → Ma'am Grace → Boss RTC. */
-function ApprovalModal({ request, onClose, onApproveLevel, onRejectLevel }) {
-  const ap = normalizeApprovals(request.approvals);
-  return (
-    <div className="pcp-modal-backdrop" onClick={onClose}>
-      <div className="pcp-modal" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
-        <div className="pcp-modal-head">
-          <h3>Approval Matrix — {request.requestNo}</h3>
-          <button className="pcp-btn pcp-btn-ghost pcp-btn-sm" onClick={onClose}><X size={15} /></button>
-        </div>
-        <div className="pcp-modal-body">
-          <div style={{ background: "var(--paper)", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12.5 }}>
-            <div><strong>{request.employee}</strong> · {request.branchCode} · {peso(request.amount)}</div>
-            <div style={{ color: "var(--text-mut)", marginTop: 3 }}>{request.purpose}</div>
-          </div>
-          {APPROVAL_LEVELS.map((lvl) => {
-            const st = ap[lvl].status;
-            const cls = st === "Approved" ? "pcp-appr-approved" : st === "Rejected" ? "pcp-appr-rejected" : "pcp-appr-pending";
-            const locked = request.status === "Disbursed";
-            return (
-              <div className="pcp-appr-row" key={lvl}>
-                <div className="pcp-appr-level">{lvl}</div>
-                <div>
-                  <span className={`pcp-appr-chip ${cls}`}>{st}</span>
-                  {ap[lvl].by ? <span style={{ fontSize: 11, color: "var(--text-mut)", marginLeft: 8 }}>by {ap[lvl].by}{ap[lvl].date ? ` · ${fmtDate(ap[lvl].date)}` : ""}</span> : null}
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button className="pcp-btn pcp-btn-sm" disabled={locked || st === "Approved"} onClick={() => onApproveLevel(request.id, lvl)} title="Approve"><Check size={12} /></button>
-                  <button className="pcp-btn pcp-btn-sm pcp-btn-danger" disabled={locked || st === "Rejected"} onClick={() => onRejectLevel(request.id, lvl)} title="Reject"><X size={12} /></button>
-                </div>
-              </div>
-            );
-          })}
-          <div style={{ marginTop: 14, fontSize: 12, color: "var(--text-mut)" }}>
-            A request must be approved by all {APPROVAL_LEVELS.length} levels before it can be disbursed.
-          </div>
-        </div>
-        <div className="pcp-modal-foot">
-          <button className="pcp-btn pcp-btn-primary" onClick={onClose}>Done</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ApprovalChips({ approvals }) {
-  const ap = normalizeApprovals(approvals);
-  const short = { "Manager": "Mgr", "Director": "Dir", "Ma'am Grace": "Grace", "Boss RTC": "RTC" };
-  return (
-    <div className="pcp-appr-chips">
-      {APPROVAL_LEVELS.map((lvl) => {
-        const st = ap[lvl].status;
-        const cls = st === "Approved" ? "pcp-appr-approved" : st === "Rejected" ? "pcp-appr-rejected" : "pcp-appr-pending";
-        const mark = st === "Approved" ? "✓" : st === "Rejected" ? "✕" : "•";
-        return <span className={`pcp-appr-chip ${cls}`} key={lvl} title={`${lvl}: ${st}`}>{short[lvl]} {mark}</span>;
-      })}
-    </div>
-  );
-}
-
-function RequestsTab({ requests, funds, onCreate, onEdit, onApproveLevel, onRejectLevel, onDisburse }) {
+function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, onDisburse, plantOptions, canApprove, canRelease }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [approving, setApproving] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
   const [search, setSearch] = useState("");
+  const [plant, setPlant] = useState("ALL");
 
   const nextRequestNo = "PCR-2026-" + String(requests.length + 1).padStart(4, "0");
 
-  /* Keep the approval modal in sync with the latest request state after each click. */
-  const approvingLive = approving ? requests.find((r) => r.id === approving.id) : null;
-
   const filtered = requests.filter((r) => {
+    if (plant !== "ALL" && r.branchCode !== plant) return false;
     if (statusFilter !== "All" && r.status !== statusFilter) return false;
     if (search && !(r.employee.toLowerCase().includes(search.toLowerCase()) || r.requestNo.toLowerCase().includes(search.toLowerCase()))) return false;
     return true;
   });
 
+  const formPlantOptions = (plantOptions && plantOptions.length)
+    ? (plant !== "ALL" ? plantOptions.filter((p) => p.code === plant) : plantOptions)
+    : null;
+
   return (
     <div>
       <TopBar
         title="Petty Cash Requests"
-        sub="Submit and approve cash advance requests before disbursement"
+        sub="Submit and approve cash advance requests before release"
         right={<button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Request</button>}
       />
       <div className="pcp-content">
+        <PlantScopeTabs plants={plantOptions} value={plant} onChange={setPlant} />
         <div className="pcp-card">
           <div style={{ padding: "14px 18px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid var(--line)" }}>
             <div style={{ position: "relative", flex: 1, maxWidth: 280 }}>
@@ -2303,8 +2236,8 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApproveLevel, onReje
             <table className="pcp-table">
               <thead>
                 <tr>
-                  <th>Request No.</th><th>Date</th><th>Employee</th><th>Department</th><th>Branch</th>
-                  <th>Purpose</th><th>Amount</th><th>Approval Matrix</th><th>Status</th><th></th>
+                  <th>Request No.</th><th>Date</th><th>Employee</th><th>Department</th><th>Plant</th>
+                  <th>Purpose</th><th>Amount</th><th>Approver</th><th>Status</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -2314,26 +2247,24 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApproveLevel, onReje
                     <td>{fmtDate(r.date)}</td>
                     <td>{r.employee}</td>
                     <td title={subaccountLabel(r.department)}>{subaccountLabel(r.department)}</td>
-                    <td>{r.branchCode}</td>
+                    <td>{plantLabel(r.branchCode)}</td>
                     <td style={{ maxWidth: 220, whiteSpace: "normal" }}>{r.purpose}</td>
                     <td className="pcp-num">{peso(r.amount)}</td>
-                    <td>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                        <ApprovalChips approvals={r.approvals} />
-                        <span style={{ fontSize: 10.5, color: "var(--text-mut)" }}>{approvedCount(r.approvals)} / {APPROVAL_LEVELS.length} approved</span>
-                      </div>
-                    </td>
+                    <td>{r.approver || "—"}</td>
                     <td><Badge status={r.status} /></td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
-                        {r.status !== "Disbursed" && (
-                          <button className="pcp-btn pcp-btn-sm" onClick={() => setApproving(r)} title="Manage approvals"><ClipboardList size={12} /></button>
+                        {canApprove && r.status === "Pending" && (
+                          <>
+                            <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => onApprove(r.id)} title="Approve request"><Check size={12} /> Approve</button>
+                            <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => onReject(r.id)} title="Reject request"><X size={12} /></button>
+                          </>
                         )}
                         {r.status !== "Disbursed" && (
                           <button className="pcp-btn pcp-btn-sm" onClick={() => setEditing(r)} title="Edit request"><Edit3 size={12} /></button>
                         )}
-                        {r.status === "Approved" && (
-                          <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => onDisburse(r)}>Disburse</button>
+                        {canRelease && r.status === "Approved" && (
+                          <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => onDisburse(r)}>Release</button>
                         )}
                       </div>
                     </td>
@@ -2347,6 +2278,7 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApproveLevel, onReje
       {showForm && (
         <RequestFormModal
           nextRequestNo={nextRequestNo}
+          plantOptions={formPlantOptions}
           onClose={() => setShowForm(false)}
           onSave={(form) => { onCreate({ ...form, requestNo: nextRequestNo }); setShowForm(false); }}
         />
@@ -2354,16 +2286,9 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApproveLevel, onReje
       {editing && (
         <RequestFormModal
           request={editing}
+          plantOptions={formPlantOptions}
           onClose={() => setEditing(null)}
           onSave={(form) => { onEdit(editing.id, form); setEditing(null); }}
-        />
-      )}
-      {approvingLive && (
-        <ApprovalModal
-          request={approvingLive}
-          onClose={() => setApproving(null)}
-          onApproveLevel={onApproveLevel}
-          onRejectLevel={onRejectLevel}
         />
       )}
     </div>
@@ -2503,7 +2428,7 @@ const SORT_FIELDS = {
   branchCode: (d) => d.branchCode, amount: (d) => d.amount,
 };
 
-function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement }) {
+function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions }) {
   const [search, setSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -2567,6 +2492,7 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
         }
       />
       <div className="pcp-content">
+        <PlantScopeTabs plants={plantOptions} value={branchFilter === "All" ? "ALL" : branchFilter} onChange={(v) => setBranchFilter(v === "ALL" ? "All" : v)} />
         <div className="pcp-card">
           <div style={{ padding: "14px 18px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
             <div style={{ position: "relative", flex: 1, minWidth: 200, maxWidth: 280 }}>
@@ -2575,7 +2501,7 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
             </div>
             <select className="pcp-select" style={{ width: 160 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
               <option>All</option>
-              {BRANCHES.map((b) => <option key={b.code} value={b.code}>{b.code}</option>)}
+              {(plantOptions || BRANCHES.map((b) => ({ code: b.code, label: b.code }))).map((b) => <option key={b.code} value={b.code}>{b.label}</option>)}
             </select>
             <select className="pcp-select" style={{ width: 180 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               {["All", "Not Liquidated", "Partially Liquidated", "Fully Liquidated", "Over-Liquidated"].map((s) => <option key={s}>{s}</option>)}
@@ -2829,11 +2755,13 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
   );
 }
 
-function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExport, onExportAll }) {
+function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showAll, setShowAll] = useState(false);
+  const [plant, setPlant] = useState("ALL");
 
-  const enriched = disbursements.map((d) => ({ ...d, liqStatus: liqStatusFor(d, liquidations) }));
+  const scoped = plant === "ALL" ? disbursements : disbursements.filter((d) => d.branchCode === plant);
+  const enriched = scoped.map((d) => ({ ...d, liqStatus: liqStatusFor(d, liquidations) }));
   const list = showAll ? enriched : enriched.filter((d) => d.liqStatus !== "Fully Liquidated");
   const selected = enriched.find((d) => d.id === selectedId) || list[0] || null;
   const exportableCount = disbursements.filter((d) => {
@@ -2853,6 +2781,7 @@ function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExpo
         }
       />
       <div className="pcp-content">
+        <PlantScopeTabs plants={plantOptions} value={plant} onChange={(v) => { setPlant(v); setSelectedId(null); }} />
         <div className="pcp-grid-2" style={{ gridTemplateColumns: "340px 1fr" }}>
           <div className="pcp-card pcp-card-pad">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -3143,19 +3072,14 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
 
     const rRows = requests.map((r) => ({
       "Request No.": r.requestNo, "Date": r.date, "Employee": r.employee, "Branch": r.branchCode,
-      "Department": deptDesc(r.department), "Purpose": r.purpose, "Amount": r.amount, "Status": r.status,
-      "Manager": (normalizeApprovals(r.approvals)["Manager"] || {}).status,
-      "Director": (normalizeApprovals(r.approvals)["Director"] || {}).status,
-      "Ma'am Grace": (normalizeApprovals(r.approvals)["Ma'am Grace"] || {}).status,
-      "Boss RTC": (normalizeApprovals(r.approvals)["Boss RTC"] || {}).status,
+      "Department": deptDesc(r.department), "Purpose": r.purpose, "Amount": r.amount, "Approver": r.approver || "", "Status": r.status,
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rRows.length ? rRows : [{}]), "Requests");
 
     const repRows = (replenishments || []).map((r) => ({
       "Replenishment No.": r.replenishmentNo, "Date": r.date, "Branch": r.branchCode,
       "Company": companyOfBranch(r.branchCode), "Amount": r.amount, "Prepared By": r.preparedBy,
-      "Approved By": r.approvedBy, "Method": r.method, "Check / Ref. No.": r.checkNo,
-      "Status": r.status, "Remarks": r.remarks || "",
+      "Status": r.status || "", "Remarks": r.remarks || "",
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(repRows.length ? repRows : [{}]), "Replenishments");
 
@@ -3313,15 +3237,16 @@ function suggestedReplenishment(branchCode, disbursements, liquidations, repleni
   return Math.max(0, liquidated - replenished);
 }
 
-function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements, liquidations, replenishments, replenishment }) {
+function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements, liquidations, replenishments, replenishment, plantOptions }) {
   const isEdit = !!replenishment;
+  const defaultBranch = (plantOptions && plantOptions[0]) ? plantOptions[0].code
+    : (funds[0] ? funds[0].branchCode : BRANCHES[0].code);
   const [form, setForm] = useState(
     replenishment
       ? { ...replenishment, amount: replenishment.amount }
       : {
-          date: todayISO(), branchCode: funds[0] ? funds[0].branchCode : BRANCHES[0].code,
-          amount: "", preparedBy: "", approvedBy: "", checkNo: "", method: "Check",
-          status: "Pending", remarks: "",
+          date: todayISO(), branchCode: defaultBranch,
+          amount: "", preparedBy: "", status: "", remarks: "",
         }
   );
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -3348,13 +3273,17 @@ function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements,
           </div>
           <div className="pcp-field-row">
             <div className="pcp-field">
-              <label>Fund / Branch</label>
+              <label>Fund / Plant</label>
               <select className="pcp-select" value={form.branchCode} onChange={(e) => set("branchCode", e.target.value)}>
-                {COMPANIES.map((c) => (
-                  <optgroup label={c} key={c}>
-                    {branchesForCompany(c).map((b) => <option key={b.code} value={b.code}>{b.name} ({b.code})</option>)}
-                  </optgroup>
-                ))}
+                {plantOptions ? (
+                  plantOptions.map((p) => <option key={p.code} value={p.code}>{p.label} ({p.code})</option>)
+                ) : (
+                  COMPANIES.map((c) => (
+                    <optgroup label={c} key={c}>
+                      {branchesForCompany(c).map((b) => <option key={b.code} value={b.code}>{b.name} ({b.code})</option>)}
+                    </optgroup>
+                  ))
+                )}
               </select>
             </div>
             <div className="pcp-field">
@@ -3372,33 +3301,16 @@ function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements,
               <input className="pcp-input" placeholder="Full name" value={form.preparedBy} onChange={(e) => set("preparedBy", e.target.value)} />
             </div>
             <div className="pcp-field">
-              <label>Approved By</label>
-              <input className="pcp-input" placeholder="Full name" value={form.approvedBy} onChange={(e) => set("approvedBy", e.target.value)} />
-            </div>
-          </div>
-          <div className="pcp-field-row">
-            <div className="pcp-field">
-              <label>Release Method</label>
-              <select className="pcp-select" value={form.method} onChange={(e) => set("method", e.target.value)}>
-                {REPLENISH_METHODS.map((mth) => <option key={mth}>{mth}</option>)}
-              </select>
-            </div>
-            <div className="pcp-field">
-              <label>Check / Reference No.</label>
-              <input className="pcp-input" placeholder="e.g. CHK-00123" value={form.checkNo} onChange={(e) => set("checkNo", e.target.value)} />
-            </div>
-          </div>
-          <div className="pcp-field-row">
-            <div className="pcp-field">
-              <label>Status</label>
+              <label>Status <span style={{ color: "var(--text-mut)", fontWeight: 400 }}>(optional)</span></label>
               <select className="pcp-select" value={form.status} onChange={(e) => set("status", e.target.value)}>
+                <option value="">—</option>
                 {REPLENISH_STATUSES.map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
-            <div className="pcp-field">
-              <label>Remarks</label>
-              <input className="pcp-input" placeholder="Optional notes" value={form.remarks} onChange={(e) => set("remarks", e.target.value)} />
-            </div>
+          </div>
+          <div className="pcp-field">
+            <label>Remarks</label>
+            <input className="pcp-input" placeholder="Optional notes" value={form.remarks} onChange={(e) => set("remarks", e.target.value)} />
           </div>
         </div>
         <div className="pcp-modal-foot">
@@ -3410,24 +3322,30 @@ function ReplenishmentFormModal({ onClose, onSave, nextNo, funds, disbursements,
   );
 }
 
-function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, onCreate, onEdit, onComplete, onDelete }) {
+function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, onCreate, onEdit, onComplete, onDelete, plantOptions, canEdit }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
   const [search, setSearch] = useState("");
+  const [plant, setPlant] = useState("ALL");
 
   const nextNo = "PCRP-2026-" + String(replenishments.length + 1).padStart(4, "0");
   const totalCompleted = replenishments.filter((r) => r.status === "Completed").reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const totalPending = replenishments.filter((r) => r.status !== "Completed").reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
   const filtered = replenishments.filter((r) => {
+    if (plant !== "ALL" && r.branchCode !== plant) return false;
     if (statusFilter !== "All" && r.status !== statusFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!(r.replenishmentNo.toLowerCase().includes(q) || (r.preparedBy || "").toLowerCase().includes(q) || (r.checkNo || "").toLowerCase().includes(q))) return false;
+      if (!(r.replenishmentNo.toLowerCase().includes(q) || (r.preparedBy || "").toLowerCase().includes(q))) return false;
     }
     return true;
   }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  const formPlantOptions = (plantOptions && plantOptions.length)
+    ? (plant !== "ALL" ? plantOptions.filter((p) => p.code === plant) : plantOptions)
+    : null;
 
   return (
     <div>
@@ -3437,6 +3355,7 @@ function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, 
         right={<button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Replenishment</button>}
       />
       <div className="pcp-content">
+        <PlantScopeTabs plants={plantOptions} value={plant} onChange={setPlant} />
         <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
           <KpiCard label="Total Replenished" value={peso(totalCompleted)} icon={RefreshCw} tint="#15803d" foot="Completed reimbursements" />
           <KpiCard label="Pending Replenishments" value={replenishments.filter((r) => r.status !== "Completed").length} icon={Clock} tint="#b9790a" foot={peso(totalPending) + " in progress"} />
@@ -3446,7 +3365,7 @@ function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, 
           <div style={{ padding: "14px 18px", display: "flex", gap: 10, alignItems: "center", borderBottom: "1px solid var(--line)" }}>
             <div style={{ position: "relative", flex: 1, maxWidth: 280 }}>
               <Search size={14} style={{ position: "absolute", left: 9, top: 9, color: "#9098b3" }} />
-              <input className="pcp-input" style={{ paddingLeft: 28 }} placeholder="Search no., preparer or check no." value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input className="pcp-input" style={{ paddingLeft: 28 }} placeholder="Search no. or preparer" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
             <select className="pcp-select" style={{ width: 170 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               {["All", ...REPLENISH_STATUSES].map((s) => <option key={s}>{s}</option>)}
@@ -3457,8 +3376,8 @@ function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, 
             <table className="pcp-table">
               <thead>
                 <tr>
-                  <th>Replenishment No.</th><th>Date</th><th>Fund / Branch</th><th>Amount</th>
-                  <th>Prepared By</th><th>Approved By</th><th>Method</th><th>Check / Ref.</th><th>Status</th><th></th>
+                  <th>Replenishment No.</th><th>Date</th><th>Fund / Plant</th><th>Amount</th>
+                  <th>Prepared By</th><th>Status</th><th>Remarks</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -3466,24 +3385,24 @@ function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, 
                   <tr key={r.id}>
                     <td>{r.replenishmentNo}</td>
                     <td>{fmtDate(r.date)}</td>
-                    <td>{r.branchCode} <span style={{ fontSize: 11, color: "var(--text-mut)" }}>· {companyOfBranch(r.branchCode)}</span></td>
+                    <td>{plantLabel(r.branchCode)}</td>
                     <td className="pcp-num">{peso(r.amount)}</td>
                     <td>{r.preparedBy || "—"}</td>
-                    <td>{r.approvedBy || "—"}</td>
-                    <td>{r.method}</td>
-                    <td>{r.checkNo || "—"}</td>
-                    <td><Badge status={r.status} /></td>
+                    <td>{r.status ? <Badge status={r.status} /> : <span style={{ color: "var(--text-mut)" }}>—</span>}</td>
+                    <td style={{ maxWidth: 200, whiteSpace: "normal" }}>{r.remarks || "—"}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
-                        {r.status !== "Completed" && (
+                        {canEdit && r.status !== "Completed" && (
                           <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => onComplete(r.id)} title="Mark completed"><Check size={12} /></button>
                         )}
                         <button className="pcp-btn pcp-btn-sm" onClick={() => setEditing(r)} title="Edit"><Edit3 size={12} /></button>
-                        <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => onDelete(r.id)} title="Delete"><Trash2 size={12} /></button>
+                        {canEdit && (
+                          <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => onDelete(r.id)} title="Delete"><Trash2 size={12} /></button>
+                        )}
                       </div>
                     </td>
                   </tr>
-                )) : <tr><td colSpan={10} className="pcp-empty">No replenishment records match your filters</td></tr>}
+                )) : <tr><td colSpan={8} className="pcp-empty">No replenishment records match your filters</td></tr>}
               </tbody>
             </table>
           </div>
@@ -3491,14 +3410,14 @@ function ReplenishmentTab({ replenishments, funds, disbursements, liquidations, 
       </div>
       {showForm && (
         <ReplenishmentFormModal
-          nextNo={nextNo} funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
+          nextNo={nextNo} funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments} plantOptions={formPlantOptions}
           onClose={() => setShowForm(false)}
           onSave={(form) => { onCreate({ ...form, replenishmentNo: nextNo }); setShowForm(false); }}
         />
       )}
       {editing && (
         <ReplenishmentFormModal
-          replenishment={editing} funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
+          replenishment={editing} funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments} plantOptions={formPlantOptions}
           onClose={() => setEditing(null)}
           onSave={(form) => { onEdit(editing.id, form); setEditing(null); }}
         />
@@ -3535,12 +3454,12 @@ function buildTransactionFeed(requests, disbursements, liquidations, replenishme
   (replenishments || []).forEach((r) => rows.push({
     id: "t-rep-" + r.id, type: "Replenishment", date: r.date, ref: r.replenishmentNo,
     party: r.preparedBy, branchCode: r.branchCode, department: "",
-    category: r.method, amount: Number(r.amount) || 0, status: r.status,
+    category: r.remarks || "Replenishment", amount: Number(r.amount) || 0, status: r.status || "—",
   }));
   return rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 }
 
-function TransactionHistoryTab({ requests, disbursements, liquidations, replenishments, initialFilter }) {
+function TransactionHistoryTab({ requests, disbursements, liquidations, replenishments, initialFilter, plantOptions }) {
   const [type, setType] = useState("All");
   const [company, setCompany] = useState("All");
   const [status, setStatus] = useState("All");
@@ -3549,12 +3468,14 @@ function TransactionHistoryTab({ requests, disbursements, liquidations, replenis
   const [to, setTo] = useState("");
   const [minAmt, setMinAmt] = useState("");
   const [maxAmt, setMaxAmt] = useState("");
+  const [plant, setPlant] = useState("ALL");
 
   useEffect(() => { if (initialFilter && initialFilter.type) setType(initialFilter.type); }, [initialFilter]);
 
   const feed = useMemo(() => buildTransactionFeed(requests, disbursements, liquidations, replenishments), [requests, disbursements, liquidations, replenishments]);
 
   const filtered = useMemo(() => feed.filter((t) => {
+    if (plant !== "ALL" && t.branchCode !== plant) return false;
     if (type !== "All" && t.type !== type) return false;
     if (company !== "All" && companyOfBranch(t.branchCode) !== company) return false;
     if (status !== "All" && t.status !== status) return false;
@@ -3567,7 +3488,7 @@ function TransactionHistoryTab({ requests, disbursements, liquidations, replenis
       if (!((t.ref || "").toLowerCase().includes(q) || (t.party || "").toLowerCase().includes(q) || (t.category || "").toLowerCase().includes(q))) return false;
     }
     return true;
-  }), [feed, type, company, status, from, to, minAmt, maxAmt, search]);
+  }), [feed, type, company, status, from, to, minAmt, maxAmt, search, plant]);
 
   const total = filtered.reduce((s, t) => s + t.amount, 0);
 
@@ -3593,6 +3514,7 @@ function TransactionHistoryTab({ requests, disbursements, liquidations, replenis
         right={<button className="pcp-btn pcp-btn-primary" onClick={exportExcel}><FileSpreadsheet size={14} /> Export to Excel</button>}
       />
       <div className="pcp-content">
+        <PlantScopeTabs plants={plantOptions} value={plant} onChange={setPlant} />
         <div className="pcp-card" style={{ marginBottom: 16 }}>
           <div style={{ padding: "14px 18px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
             <div className="pcp-field" style={{ margin: 0 }}>
@@ -3675,7 +3597,7 @@ function TransactionHistoryTab({ requests, disbursements, liquidations, replenis
 
 /* ============================= AUDIT TRAIL ============================= */
 
-const AUDIT_ACTIONS = ["Request Created", "Edited", "Approved", "Rejected", "Released", "Liquidated", "Replenished", "Deleted"];
+const AUDIT_ACTIONS = ["Signed In", "Signed Out", "Request Created", "Edited", "Approved", "Rejected", "Released", "Liquidated", "Replenished", "Deleted", "Password Changed"];
 
 function AuditTrailTab({ auditLog }) {
   const [search, setSearch] = useState("");
@@ -3746,9 +3668,141 @@ function AuditTrailTab({ auditLog }) {
   );
 }
 
+/* ============================= ACCOUNT & ADMIN ============================= */
+
+/* Change the signed-in user's own password. Uses the Supabase auth client
+   (window.PCP_AUTH.updatePassword) so the new password is hashed server-side. */
+function ChangePasswordModal({ onClose, onDone }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [ok, setOk] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(""); setOk("");
+    if (pw.length < 8) { setError("Password must be at least 8 characters."); return; }
+    if (pw !== pw2) { setError("The two passwords do not match."); return; }
+    setBusy(true);
+    try {
+      const auth = window.PCP_AUTH;
+      if (!auth || !auth.updatePassword) { setError("Password changes are handled by your administrator in this deployment."); setBusy(false); return; }
+      const res = await auth.updatePassword(pw);
+      if (res && res.error) { setError(res.error.message || "Could not update password."); }
+      else { setOk("Password updated successfully."); if (onDone) onDone("Password updated"); setTimeout(onClose, 1200); }
+    } catch (err) {
+      setError("Could not update password. Check your connection.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="pcp-modal-backdrop" onClick={onClose}>
+      <div className="pcp-modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+        <div className="pcp-modal-head">
+          <h3>Change Password</h3>
+          <button className="pcp-btn pcp-btn-ghost pcp-btn-sm" onClick={onClose}><X size={15} /></button>
+        </div>
+        <form className="pcp-modal-body" onSubmit={submit}>
+          {error && <div className="pcp-login-err">{error}</div>}
+          {ok && <div className="pcp-login-ok">{ok}</div>}
+          <div className="pcp-field">
+            <label>New Password</label>
+            <input type="password" className="pcp-input" autoComplete="new-password" placeholder="At least 8 characters" value={pw} onChange={(e) => setPw(e.target.value)} required />
+          </div>
+          <div className="pcp-field">
+            <label>Confirm New Password</label>
+            <input type="password" className="pcp-input" autoComplete="new-password" placeholder="Re-type new password" value={pw2} onChange={(e) => setPw2(e.target.value)} required />
+          </div>
+          <div className="pcp-modal-foot" style={{ padding: "8px 0 0" }}>
+            <button type="button" className="pcp-btn" onClick={onClose}>Cancel</button>
+            <button type="submit" className="pcp-btn pcp-btn-primary" disabled={busy}>{busy ? "Saving…" : "Update Password"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* Read-only roster of the configured users and their access — Accounting only.
+   Accounts themselves are created/reset in the Supabase dashboard, so this view
+   documents who has access to what. */
+function UserManagementTab({ currentEmail, onChangePassword }) {
+  const users = window.PCP_USERS || {};
+  const rows = Object.keys(users).map((email) => ({ email, ...users[email] }));
+  const plantsLabel = (p) => (p === "ALL" || !p) ? "All plants" : resolvePlants(p).map(plantLabel).join(", ");
+  return (
+    <div>
+      <TopBar
+        title="User Management"
+        sub="Authorized users, their roles and plant access (Role-Based Access Control)"
+        right={<button className="pcp-btn" onClick={onChangePassword}><KeyRound size={14} /> Change My Password</button>}
+      />
+      <div className="pcp-content">
+        <div className="pcp-card">
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead><tr><th>Name</th><th>Login (email)</th><th>Role</th><th>Plant Access</th><th>Admin</th></tr></thead>
+              <tbody>
+                {rows.length ? rows.map((u) => (
+                  <tr key={u.email}>
+                    <td style={{ fontWeight: 600 }}>{u.name}{String(u.email).toLowerCase() === String(currentEmail || "").toLowerCase() ? " (you)" : ""}</td>
+                    <td>{u.email}</td>
+                    <td>{ROLES[u.role] ? ROLES[u.role].label : (u.role || "Custodian")}</td>
+                    <td>{plantsLabel(u.plants)}</td>
+                    <td>{(u.role === "Accounting") ? <Badge status="Approved" /> : <span style={{ color: "var(--text-mut)" }}>—</span>}</td>
+                  </tr>
+                )) : <tr><td colSpan={5} className="pcp-empty">No users configured. Add them in index.html (window.PCP_USERS) and in your Supabase project.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="pcp-card pcp-card-pad" style={{ marginTop: 16, fontSize: 12.5, color: "var(--text-mut)", lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>Managing accounts</div>
+          Passwords are hashed and stored securely by the authentication provider (Supabase). To add, remove or reset a user's
+          password, use the Supabase dashboard (Authentication → Users). Each user can also change their own password from the
+          sidebar. Role and plant access for each account are configured in <code>index.html</code> under <code>window.PCP_USERS</code>.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SystemSettingsTab({ userName, userEmail, role, plants }) {
+  const cloud = !!(window.PCP_AUTH && window.PCP_AUTH.enabled);
+  const plantsLabel = (plants && plants.length) ? plants.map(plantLabel).join(", ") : "All plants";
+  return (
+    <div>
+      <TopBar title="System Settings" sub="Environment, data storage and access configuration" />
+      <div className="pcp-content">
+        <div className="pcp-grid-2">
+          <div className="pcp-card pcp-card-pad">
+            <div className="pcp-section-title"><Settings size={15} color="#c8102e" /> Your Account</div>
+            <table className="pcp-table"><tbody>
+              <tr><td style={{ fontWeight: 600 }}>Name</td><td>{userName || "—"}</td></tr>
+              <tr><td style={{ fontWeight: 600 }}>Login</td><td>{userEmail || "Local mode"}</td></tr>
+              <tr><td style={{ fontWeight: 600 }}>Role</td><td>{ROLES[role] ? ROLES[role].label : role}</td></tr>
+              <tr><td style={{ fontWeight: 600 }}>Plant Access</td><td>{plantsLabel}</td></tr>
+            </tbody></table>
+          </div>
+          <div className="pcp-card pcp-card-pad">
+            <div className="pcp-section-title"><ShieldCheck size={15} color="#c8102e" /> Security & Storage</div>
+            <table className="pcp-table"><tbody>
+              <tr><td style={{ fontWeight: 600 }}>Authentication</td><td>{cloud ? "Supabase (secure, hashed passwords)" : "Local mode"}</td></tr>
+              <tr><td style={{ fontWeight: 600 }}>Access control</td><td>Role-Based Access Control (RBAC) with plant scoping</td></tr>
+              <tr><td style={{ fontWeight: 600 }}>Shared database</td><td>{cloud ? "Enabled" : "Local browser only"}</td></tr>
+              <tr><td style={{ fontWeight: 600 }}>Data version</td><td>{DATA_VERSION}</td></tr>
+            </tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============================= APP ============================= */
 
-export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
+export default function App({ userEmail, userName, onSignOut, userRole, isAdmin, userPlants }) {
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("dashboard");
   const [dashboardBranch, setDashboardBranch] = useState("ALL");
@@ -3758,49 +3812,83 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
   const [liquidations, setLiquidations] = useState([]);
   const [replenishments, setReplenishments] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
-  const [role, setRole] = useState(userRole || "Administrator");
+  const [role, setRole] = useState(userRole || "Accounting");
   /* Non-admins are locked to their assigned role; admins may view-as any role. */
-  useEffect(() => { setRole(userRole || "Administrator"); }, [userRole]);
+  useEffect(() => { setRole(userRole || "Accounting"); }, [userRole]);
   const guardedSetRole = useCallback((r) => { if (isAdmin) setRole(r); }, [isAdmin]);
   const [historyFilter, setHistoryFilter] = useState(null);
   const [disburseTarget, setDisburseTarget] = useState(null);
   const [showEditBalances, setShowEditBalances] = useState(false);
+  const [showChangePw, setShowChangePw] = useState(false);
   const [saveTick, setSaveTick] = useState(0);
 
-  /* Append an entry to the immutable audit trail, tagged with the active role. */
+  /* Plant-level access scope for this user (list of allowed branch codes). */
+  const allowedPlants = useMemo(() => resolvePlants(userPlants), [userPlants]);
+  const plantOptions = useMemo(
+    () => PLANTS.filter((p) => allowedPlants.includes(p.code)).map((p) => ({ code: p.code, label: p.label })),
+    [allowedPlants]
+  );
+  const inScope = useCallback((code) => allowedPlants.includes(code), [allowedPlants]);
+  /* Whoever is signed in has full edit/approve/release rights within their scope. */
+  const canEdit = true, canApprove = true, canRelease = true;
+
+  /* Append an entry to the immutable audit trail, tagged with the signed-in user. */
   const logAudit = useCallback((action, entity, remarks) => {
     setAuditLog((log) => [...log, {
-      id: uid("aud"), ts: new Date().toISOString().slice(0, 19), user: role, action, entity, remarks: remarks || "",
+      id: uid("aud"), ts: new Date().toISOString().slice(0, 19), user: userName || role, action, entity, remarks: remarks || "",
     }]);
-  }, [role]);
+  }, [role, userName]);
+
+  /* Record sign-in once per session, and sign-out via a wrapped handler. */
+  const loginLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!loaded || loginLoggedRef.current) return;
+    loginLoggedRef.current = true;
+    setAuditLog((log) => [...log, {
+      id: uid("aud"), ts: new Date().toISOString().slice(0, 19),
+      user: userName || (userEmail || "User"), action: "Signed In",
+      entity: userEmail || "—", remarks: `Role: ${ROLES[role] ? ROLES[role].label : role}`,
+    }]);
+  }, [loaded]); // eslint-disable-line
+
+  const handleSignOut = useCallback(() => {
+    setAuditLog((log) => {
+      const next = [...log, {
+        id: uid("aud"), ts: new Date().toISOString().slice(0, 19),
+        user: userName || (userEmail || "User"), action: "Signed Out",
+        entity: userEmail || "—", remarks: "",
+      }];
+      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next }); } catch (e) {}
+      return next;
+    });
+    if (onSignOut) onSignOut();
+  }, [onSignOut, userName, userEmail, funds, requests, disbursements, liquidations, replenishments]);
 
   useEffect(() => {
     (async () => {
       const saved = await loadState();
-      /* Backfill the approval matrix on any request saved before it existed. */
-      const migrateRequests = (rs) => (rs || []).map((r) => {
-        const approvals = normalizeApprovals(r.approvals);
-        /* Legacy requests already marked Approved/Disbursed count as fully approved. */
-        if (!r.approvals && (r.status === "Approved" || r.status === "Disbursed")) {
-          APPROVAL_LEVELS.forEach((lvl) => { approvals[lvl] = { status: "Approved", by: r.approver || lvl, date: r.date || "" }; });
-        }
-        return { ...r, approvals };
-      });
-      if (saved) {
-        setFunds(saved.funds || seedFunds());
-        setRequests(migrateRequests(saved.requests || seedRequests()));
-        setDisbursements(saved.disbursements || seedDisbursements());
-        setLiquidations(saved.liquidations || seedLiquidations());
-        setReplenishments(saved.replenishments || seedReplenishments());
-        setAuditLog(saved.auditLog || seedAuditLog());
-        /* Role is derived per-user from login, not from the shared blob. */
+      /* Always keep the four master plant funds available, adding any missing. */
+      const ensureFunds = (fs) => {
+        const list = (fs && fs.length) ? fs.map((f) => ({ ...f })) : seedFunds();
+        seedFunds().forEach((sf) => { if (!list.some((f) => f.branchCode === sf.branchCode)) list.push(sf); });
+        return list;
+      };
+      if (saved && saved.dataVersion === DATA_VERSION) {
+        setFunds(ensureFunds(saved.funds));
+        setRequests(saved.requests || []);
+        setDisbursements(saved.disbursements || []);
+        setLiquidations(saved.liquidations || []);
+        setReplenishments(saved.replenishments || []);
+        setAuditLog(saved.auditLog || []);
       } else {
-        setFunds(seedFunds());
-        setRequests(migrateRequests(seedRequests()));
-        setDisbursements(seedDisbursements());
-        setLiquidations(seedLiquidations());
-        setReplenishments(seedReplenishments());
-        setAuditLog(seedAuditLog());
+        /* First load after this upgrade — keep master funds but clear ALL
+           existing transactions so the system starts with a clean database. */
+        setFunds(ensureFunds(saved && saved.funds));
+        setRequests([]);
+        setDisbursements([]);
+        setLiquidations([]);
+        setReplenishments([]);
+        setAuditLog([]);
       }
       setLoaded(true);
     })();
@@ -3808,7 +3896,7 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
 
   useEffect(() => {
     if (!loaded) return;
-    saveState({ funds, requests, disbursements, liquidations, replenishments, auditLog });
+    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog });
   }, [funds, requests, disbursements, liquidations, replenishments, auditLog, loaded]);
 
   /* ---- Requests ---- */
@@ -3817,7 +3905,6 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
       id: uid("req"), requestNo: form.requestNo, date: form.date, employee: form.employee,
       department: form.department, branchCode: form.branchCode, purpose: form.purpose,
       amount: Number(form.amount), approver: form.approver, status: "Pending",
-      approvals: defaultApprovals(),
     }]);
     logAudit("Request Created", form.requestNo, `${form.employee} · ${peso(Number(form.amount))} · ${form.purpose}`);
   }, [logAudit]);
@@ -3832,21 +3919,18 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
     logAudit("Edited", r ? r.requestNo : id, `Request updated · ${form.employee} · ${peso(Number(form.amount))}`);
   }, [logAudit, requests]);
 
-  /* Set one approval level, then recompute the overall request status. */
-  const setApprovalLevel = useCallback((id, level, status, by) => {
-    setRequests((rs) => rs.map((r) => {
-      if (r.id !== id || r.status === "Disbursed") return r;
-      const approvals = normalizeApprovals(r.approvals);
-      approvals[level] = { status, by: by || level, date: todayISO() };
-      const nextStatus = overallApprovalStatus(approvals);
-      const r2 = requests.find((x) => x.id === id);
-      logAudit(status === "Approved" ? "Approved" : "Rejected", r2 ? r2.requestNo : id, `${level} ${status.toLowerCase()}${nextStatus !== "Pending" ? ` · overall ${nextStatus}` : ""}`);
-      return { ...r, approvals, status: nextStatus };
-    }));
+  /* Simple single-step approve / reject (the multi-level approval matrix was removed). */
+  const approveRequest = useCallback((id) => {
+    setRequests((rs) => rs.map((r) => (r.id === id && r.status === "Pending" ? { ...r, status: "Approved" } : r)));
+    const r = requests.find((x) => x.id === id);
+    logAudit("Approved", r ? r.requestNo : id, "Request approved");
   }, [logAudit, requests]);
 
-  const approveLevel = useCallback((id, level) => setApprovalLevel(id, level, "Approved", level), [setApprovalLevel]);
-  const rejectLevel = useCallback((id, level) => setApprovalLevel(id, level, "Rejected", level), [setApprovalLevel]);
+  const rejectRequest = useCallback((id) => {
+    setRequests((rs) => rs.map((r) => (r.id === id && r.status === "Pending" ? { ...r, status: "Rejected" } : r)));
+    const r = requests.find((x) => x.id === id);
+    logAudit("Rejected", r ? r.requestNo : id, "Request rejected");
+  }, [logAudit, requests]);
 
   /* ---- Disbursements ---- */
   const nextVoucherNo = "PCV-2026-" + String(disbursements.length + 1).padStart(4, "0");
@@ -3957,8 +4041,27 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
     setFunds((fs) => fs.map((x) => (map.has(x.id) ? { ...x, beginningBalance: map.get(x.id) } : x)));
   }, []);
 
+  /* ---- Plant-scoped views ---- */
+  /* Every module only receives data for plants the user is allowed to see, so a
+     custodian can never view or edit another plant's records. */
+  const visibleFunds = useMemo(() => funds.filter((f) => inScope(f.branchCode)), [funds, inScope]);
+  const visibleRequests = useMemo(() => requests.filter((r) => inScope(r.branchCode)), [requests, inScope]);
+  const visibleDisbursements = useMemo(() => disbursements.filter((d) => inScope(d.branchCode)), [disbursements, inScope]);
+  const visibleReplenishments = useMemo(() => replenishments.filter((r) => inScope(r.branchCode)), [replenishments, inScope]);
+  const visibleLiquidations = useMemo(() => {
+    const ids = new Set(visibleDisbursements.map((d) => d.id));
+    return liquidations.filter((l) => ids.has(l.disbursementId));
+  }, [liquidations, visibleDisbursements]);
+  /* Dashboard plant tabs limited to the user's plants. */
+  const dashBranches = useMemo(() => DASHBOARD_BRANCHES.filter((b) => allowedPlants.includes(b.branchCode)), [allowedPlants]);
+  const showConsolidated = dashBranches.length > 1;
+  useEffect(() => {
+    if (!loaded) return;
+    if (!showConsolidated && dashboardBranch === "ALL" && dashBranches[0]) setDashboardBranch(dashBranches[0].key);
+  }, [loaded, showConsolidated]); // eslint-disable-line
+
   /* ---- Roles, navigation & notifications ---- */
-  const allowedTabs = (ROLES[role] || ROLES["Administrator"]).tabs;
+  const allowedTabs = (ROLES[role] || ROLES["Accounting"]).tabs;
   const navItems = useMemo(() => NAV_ITEMS.filter((it) => allowedTabs.includes(it.key)), [allowedTabs]);
 
   /* Keep the active tab valid whenever the role (and its allowed tabs) changes. */
@@ -3973,8 +4076,8 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
   }, [allowedTabs]);
 
   const notifications = useMemo(
-    () => buildNotifications(requests, disbursements, liquidations, replenishments),
-    [requests, disbursements, liquidations, replenishments]
+    () => buildNotifications(visibleRequests, visibleDisbursements, visibleLiquidations, visibleReplenishments),
+    [visibleRequests, visibleDisbursements, visibleLiquidations, visibleReplenishments]
   );
 
   const onNotifClick = useCallback((n) => {
@@ -3998,43 +4101,49 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
     <AppUI.Provider value={uiValue}>
     <div className="pcp-root">
       <style>{CSS}</style>
-      <Sidebar tab={tab} setTab={setTab} role={role} navItems={navItems} userEmail={userEmail} onSignOut={onSignOut} />
+      <Sidebar tab={tab} setTab={setTab} role={role} navItems={navItems} userEmail={userEmail} userName={userName} onSignOut={handleSignOut} onChangePassword={() => setShowChangePw(true)} />
       <div className="pcp-main">
         {tab === "dashboard" && (
           <>
             <TopBar
-              title="Dashboard"
-              sub="Real-time summary of all petty cash activity across every plant and company"
+              title={showConsolidated ? "Dashboard" : (dashBranches[0] ? dashBranches[0].label + " Dashboard" : "Dashboard")}
+              sub="Real-time summary of petty cash activity across your assigned plants"
               right={<button className="pcp-btn" onClick={() => setShowEditBalances(true)}><Edit3 size={14} /> Edit Beginning Balances</button>}
             />
             <div className="pcp-content">
-              <div className="pcp-tabs">
-                <button
-                  className={"pcp-tab" + (dashboardBranch === "ALL" ? " active" : "")}
-                  onClick={() => setDashboardBranch("ALL")}
-                >
-                  Consolidated
-                </button>
-                {DASHBOARD_BRANCHES.map((b) => (
-                  <button
-                    key={b.key}
-                    className={"pcp-tab" + (dashboardBranch === b.key ? " active" : "")}
-                    onClick={() => setDashboardBranch(b.key)}
-                  >
-                    {b.label}
-                  </button>
-                ))}
-              </div>
+              {(showConsolidated || dashBranches.length > 1) && (
+                <div className="pcp-tabs">
+                  {showConsolidated && (
+                    <button
+                      className={"pcp-tab" + (dashboardBranch === "ALL" ? " active" : "")}
+                      onClick={() => setDashboardBranch("ALL")}
+                    >
+                      Consolidated
+                    </button>
+                  )}
+                  {dashBranches.map((b) => (
+                    <button
+                      key={b.key}
+                      className={"pcp-tab" + (dashboardBranch === b.key ? " active" : "")}
+                      onClick={() => setDashboardBranch(b.key)}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {dashboardBranch === "ALL" ? (
-                <Dashboard funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments} onNavigate={navigate} />
+                <Dashboard funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements} liquidations={visibleLiquidations} replenishments={visibleReplenishments} onNavigate={navigate} />
               ) : (
                 (() => {
-                  const b = DASHBOARD_BRANCHES.find((x) => x.key === dashboardBranch);
+                  const b = dashBranches.find((x) => x.key === dashboardBranch) || dashBranches[0];
+                  if (!b) return <div className="pcp-empty">No plant assigned.</div>;
                   return (
                     <BranchDashboard
                       label={b.label}
                       branchCode={b.branchCode}
-                      funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
+                      funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements} liquidations={visibleLiquidations} replenishments={visibleReplenishments}
+                      onNavigate={navigate}
                     />
                   );
                 })()
@@ -4044,43 +4153,47 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
         )}
         {tab === "requests" && (
           <RequestsTab
-            requests={requests} funds={funds}
+            requests={visibleRequests} funds={visibleFunds}
             onCreate={addRequest} onEdit={editRequest}
-            onApproveLevel={approveLevel} onRejectLevel={rejectLevel}
+            onApprove={approveRequest} onReject={rejectRequest}
             onDisburse={(req) => setDisburseTarget(req)}
+            plantOptions={plantOptions} canApprove={canApprove} canRelease={canRelease}
           />
         )}
         {tab === "disbursements" && (
           <DisbursementsTab
-            disbursements={disbursements} liquidations={liquidations} requests={requests}
+            disbursements={visibleDisbursements} liquidations={visibleLiquidations} requests={visibleRequests}
             onUpdateRemarks={updateRemarks} onToggleBilled={toggleBilled} onEditDisbursement={editDisbursement}
+            plantOptions={plantOptions}
           />
         )}
         {tab === "liquidation" && (
           <LiquidationTab
-            disbursements={disbursements} liquidations={liquidations}
+            disbursements={visibleDisbursements} liquidations={visibleLiquidations}
             onSaveLiquidation={saveLiquidation} onExport={exportLiquidation}
             onExportAll={exportAllToAcumatica}
+            plantOptions={plantOptions}
           />
         )}
         {tab === "replenishment" && (
           <ReplenishmentTab
-            replenishments={replenishments} funds={funds}
-            disbursements={disbursements} liquidations={liquidations}
+            replenishments={visibleReplenishments} funds={visibleFunds}
+            disbursements={visibleDisbursements} liquidations={visibleLiquidations}
             onCreate={addReplenishment} onEdit={editReplenishment}
             onComplete={completeReplenishment} onDelete={deleteReplenishment}
+            plantOptions={plantOptions} canEdit={canEdit}
           />
         )}
         {tab === "history" && (
           <TransactionHistoryTab
-            requests={requests} disbursements={disbursements}
-            liquidations={liquidations} replenishments={replenishments}
-            initialFilter={historyFilter}
+            requests={visibleRequests} disbursements={visibleDisbursements}
+            liquidations={visibleLiquidations} replenishments={visibleReplenishments}
+            initialFilter={historyFilter} plantOptions={plantOptions}
           />
         )}
         {tab === "report" && (
           <ManagementReportTab
-            funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
+            funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements} liquidations={visibleLiquidations} replenishments={visibleReplenishments}
           />
         )}
         {tab === "audit" && (
@@ -4091,6 +4204,12 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
             funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
             onAddFund={addFund} onEditFund={editFund} onDeleteFund={deleteFund}
           />
+        )}
+        {tab === "users" && (
+          <UserManagementTab currentEmail={userEmail} onChangePassword={() => setShowChangePw(true)} />
+        )}
+        {tab === "settings" && (
+          <SystemSettingsTab userName={userName} userEmail={userEmail} role={role} plants={allowedPlants} />
         )}
       </div>
 
@@ -4104,10 +4223,13 @@ export default function App({ userEmail, onSignOut, userRole, isAdmin }) {
       )}
       {showEditBalances && (
         <EditBalancesModal
-          funds={funds}
+          funds={visibleFunds}
           onClose={() => setShowEditBalances(false)}
           onSave={(updates) => { saveBalances(updates); setShowEditBalances(false); }}
         />
+      )}
+      {showChangePw && (
+        <ChangePasswordModal onClose={() => setShowChangePw(false)} onDone={(msg) => logAudit("Password Changed", userEmail || "—", msg || "Password updated")} />
       )}
     </div>
     </AppUI.Provider>
@@ -4128,7 +4250,7 @@ function localSignIn(username, password) {
     String(x.password) === String(password)
   );
   if (!u) return null;
-  return { user: u.user, role: (u.role && ROLES[u.role]) ? u.role : "Requestor" };
+  return { user: u.user, role: (u.role && ROLES[u.role]) ? u.role : "Custodian", name: u.name || u.user, plants: u.plants || "ALL" };
 }
 
 /* Sign-in screen. mode="cloud" uses Supabase email/password; mode="local"
@@ -4270,7 +4392,7 @@ function Root() {
     }
     if (!user) return <LoginScreen mode="cloud" />;
     const access = resolveUserAccess(user.email);
-    return <App userEmail={user.email} onSignOut={cloudSignOut} userRole={access.role} isAdmin={access.isAdmin} />;
+    return <App userEmail={user.email} userName={access.name} onSignOut={cloudSignOut} userRole={access.role} isAdmin={access.isAdmin} userPlants={access.plants} />;
   }
 
   /* ---- Local mode (built-in accounts) ---- */
@@ -4279,9 +4401,11 @@ function Root() {
     return (
       <App
         userEmail={localSession.user}
+        userName={localSession.name}
         onSignOut={localSignOut}
         userRole={localSession.role}
-        isAdmin={localSession.role === "Administrator"}
+        isAdmin={localSession.role === "Accounting"}
+        userPlants={localSession.plants}
       />
     );
   }
