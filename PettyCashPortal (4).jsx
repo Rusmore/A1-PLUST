@@ -146,23 +146,11 @@ function computeMetrics(funds, requests, disbursements, liquidations, replenishm
   const monthlyExpenses = liquidations.reduce((s, l) =>
     s + l.lines.reduce((ls, ln) => ls + ((ln.date || "").slice(0, 7) === nowMonth ? (Number(ln.amount) || 0) : 0), 0), 0);
 
-  /* Scheduled/Future Transactions — approved requests not yet disbursed whose
-     scheduled (or request) date is after today. These are projected only:
-     they do NOT reduce the Current Available Balance, only the Projected one. */
-  const today = todayISO();
-  const futureTransactions = requests.filter((r) =>
-    r.status === "Approved" && (r.scheduledDate || r.date) > today
-  );
-  const scheduledFutureTotal = futureTransactions.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-  const scheduledFutureCount = futureTransactions.length;
-  const projectedAvailableBalance = availableBalance - scheduledFutureTotal;
-
   return {
     totalFund, totalDisbursed, totalLiquidated, totalReplenished, outstanding, availableBalance,
     pendingRequests, approvedRequests, pendingLiquidationCount, pendingReplenishments,
     monthlyExpenses, completedBilled,
     activeEmployeeCount: activeEmployees.size,
-    futureTransactions, scheduledFutureTotal, scheduledFutureCount, projectedAvailableBalance,
   };
 }
 
@@ -1485,6 +1473,22 @@ const CSS = `
   .pcp-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
 
   .pcp-empty { text-align: center; padding: 40px 20px; color: var(--text-mut); }
+
+  .pcp-branch-info {
+    display: flex; flex-wrap: wrap; gap: 0; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; margin-bottom: 16px; overflow: hidden;
+  }
+  .pcp-branch-info-item {
+    flex: 1; min-width: 200px; display: flex; align-items: center; gap: 12px; padding: 14px 18px;
+  }
+  .pcp-branch-info-item + .pcp-branch-info-item { border-left: 1px solid var(--line); }
+  .pcp-branch-info-icon {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--red-bg); color: var(--brand);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .pcp-branch-info-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-mut); }
+  .pcp-branch-info-value { font-size: 13.5px; font-weight: 700; margin-top: 2px; color: var(--text); }
+
   .pcp-flow {
     display: flex; align-items: stretch; gap: 0; background: var(--ink);
     border-radius: 12px; overflow: hidden; margin-bottom: 18px;
@@ -1596,13 +1600,51 @@ const CSS = `
   }
 
   /* ---- Print (management report) ---- */
+  @page { size: A4 portrait; margin: 14mm 12mm; }
   @media print {
     .pcp-sidebar, .pcp-topbar, .pcp-tabs, .pcp-no-print { display: none !important; }
     .pcp-root { display: block; }
     .pcp-content { padding: 0 !important; }
     .pcp-card { border: 1px solid #ccc; break-inside: avoid; }
     body, .pcp-root { background: #fff !important; }
+    table.pcp-table thead { display: table-header-group; }
+    table.pcp-table tfoot { display: table-footer-group; }
     table.pcp-table thead th { background: #f0f0f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    table.pcp-table tbody tr:nth-child(even) td { background: #f7f8fa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .pcp-report-letterhead { break-after: avoid; break-inside: avoid; }
+    .pcp-report-signature { break-inside: avoid; }
+    .pcp-print-footer { display: block !important; }
+  }
+  .pcp-print-footer { display: none; }
+
+  /* ---- Report letterhead / meta / signatures (print-ready reports) ---- */
+  .pcp-report-letterhead {
+    text-align: center; padding: 6px 0 16px; border-bottom: 2px solid var(--ink); margin-bottom: 14px; position: relative;
+  }
+  .pcp-report-letterhead-logos { display: flex; align-items: center; justify-content: center; gap: 18px; margin-bottom: 8px; }
+  .pcp-report-letterhead-logos img { max-height: 44px; max-width: 120px; object-fit: contain; }
+  .pcp-report-company-name { font-size: 15px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+  .pcp-report-portal-name { font-size: 11px; color: var(--text-mut); font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px; }
+  .pcp-report-doc-title { font-size: 18px; font-weight: 800; margin-top: 10px; letter-spacing: -0.2px; }
+  .pcp-report-meta-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 24px; text-align: left;
+    max-width: 760px; margin: 14px auto 0; font-size: 11.5px;
+  }
+  .pcp-report-meta-item { display: flex; gap: 6px; }
+  .pcp-report-meta-item b { color: var(--text-mut); font-weight: 700; min-width: 92px; }
+  .pcp-report-refno { position: absolute; top: 0; right: 0; font-size: 10px; color: var(--text-mut); text-align: right; }
+
+  .pcp-report-nothing-follows { text-align: center; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; color: var(--text-mut); padding: 10px !important; }
+
+  .pcp-report-signature { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 34px; padding-top: 6px; }
+  .pcp-report-sig-line { border-top: 1px solid var(--ink); margin-top: 34px; padding-top: 6px; text-align: center; }
+  .pcp-report-sig-name { font-size: 12px; font-weight: 700; }
+  .pcp-report-sig-role { font-size: 10.5px; color: var(--text-mut); }
+
+  .pcp-report-watermark {
+    position: fixed; top: 45%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg);
+    font-size: 70px; font-weight: 800; color: rgba(200, 16, 46, 0.12); letter-spacing: 6px;
+    pointer-events: none; z-index: 0; white-space: nowrap; -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 `;
 
@@ -2094,8 +2136,6 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
 
   return (
     <div>
-      {/* Beginning Balance always renders first, sourced from the fund master
-          config — independent of whether any transactions exist yet. */}
       <div className="pcp-flow">
         <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
           <div className="pcp-flow-label">Beginning Balance</div>
@@ -2112,13 +2152,8 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
           <div className="pcp-flow-value pcp-num">{peso(m.totalLiquidated)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("requests")}>
-          <div className="pcp-flow-label">Scheduled/Future</div>
-          <div className="pcp-flow-value pcp-num">{peso(m.scheduledFutureTotal)}</div>
-          <ChevronRight className="pcp-flow-arrow" size={18} />
-        </div>
         <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
-          <div className="pcp-flow-label">Current Available Balance</div>
+          <div className="pcp-flow-label">Available Balance</div>
           <div className="pcp-flow-value pcp-num" style={{ color: m.availableBalance < 0 ? "#ff8080" : "#8fffb0" }}>
             {peso(m.availableBalance)}
           </div>
@@ -2126,46 +2161,43 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
       </div>
 
       {(fundsForBranch.length > 0 || custodians) && (
-        <div className="pcp-eyebrow" style={{ marginBottom: 10 }}>
-          {branchCode} · {companyOfBranch(branchCode)}{custodians ? ` · Custodian: ${custodians}` : ""}
+        <div className="pcp-branch-info">
+          <div className="pcp-branch-info-item">
+            <div className="pcp-branch-info-icon"><Building2 size={16} /></div>
+            <div>
+              <div className="pcp-branch-info-label">Company</div>
+              <div className="pcp-branch-info-value">{companyOfBranch(branchCode)}</div>
+            </div>
+          </div>
+          <div className="pcp-branch-info-item">
+            <div className="pcp-branch-info-icon"><UserCog size={16} /></div>
+            <div>
+              <div className="pcp-branch-info-label">Custodian</div>
+              <div className="pcp-branch-info-value">{custodians || "—"}</div>
+            </div>
+          </div>
+          <div className="pcp-branch-info-item">
+            <div className="pcp-branch-info-icon"><Landmark size={16} /></div>
+            <div>
+              <div className="pcp-branch-info-label">Plant / Branch Code</div>
+              <div className="pcp-branch-info-value">{branchCode}</div>
+            </div>
+          </div>
         </div>
       )}
 
       <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" foot="From fund master configuration" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
         <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
         <KpiCard label="Total Liquidated" value={peso(m.totalLiquidated)} icon={ArrowDownRight} tint="#15803d" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
-        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
-        <KpiCard label="Scheduled/Future Transactions" value={m.scheduledFutureCount + " · " + peso(m.scheduledFutureTotal)} icon={Clock} tint="#7c3aed" foot="Approved, dated after today" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
-        <KpiCard label="Current Available Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
+        <KpiCard label="Available Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
           tint={m.availableBalance < 0 ? "#c8102e" : "#15803d"}
-          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand today"}
+          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand"}
           onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
-        <KpiCard label="Projected Available Balance" value={peso(m.projectedAvailableBalance)} icon={TrendingUp}
-          tint={m.projectedAvailableBalance < 0 ? "#c8102e" : "#2054a3"}
-          foot="Current − Scheduled/Future"
-          onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Completed & Billed" value={m.completedBilled} icon={Check} tint="#15803d" foot="Exported to Acumatica" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
+        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
+        <KpiCard label="Pending Liquidation" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
         <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#7c3aed" onClick={onNavigate ? () => onNavigate("history") : undefined} />
-      </div>
-
-      <div className="pcp-card pcp-card-pad" style={{ marginTop: 16 }}>
-        <div className="pcp-section-title">Scheduled / Future Transactions — {label}</div>
-        <div className="pcp-table-wrap">
-          <table className="pcp-table">
-            <thead><tr><th>Request No.</th><th>Request Date</th><th>Scheduled Date</th><th>Amount</th><th>Status</th></tr></thead>
-            <tbody>
-              {m.futureTransactions.length ? m.futureTransactions.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.requestNo}</td>
-                  <td>{fmtDate(r.date)}</td>
-                  <td>{fmtDate(r.scheduledDate || r.date)}</td>
-                  <td className="pcp-num">{peso(r.amount)}</td>
-                  <td><Badge status={r.status} /></td>
-                </tr>
-              )) : <tr><td colSpan={5} className="pcp-empty">No scheduled or future transactions for {label}</td></tr>}
-            </tbody>
-          </table>
-        </div>
       </div>
 
       <div className="pcp-card pcp-card-pad" style={{ marginTop: 16 }}>
@@ -2200,12 +2232,10 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
           date: request.date, employee: request.employee, department: request.department,
           branchCode: request.branchCode, purpose: request.purpose,
           amount: request.amount, approver: request.approver || "",
-          scheduledDate: request.scheduledDate || request.date,
         }
       : {
           date: todayISO(), employee: "", department: SUBACCOUNTS[1].code,
           branchCode: defaultBranch, purpose: "", amount: "", approver: "",
-          scheduledDate: todayISO(),
         }
   );
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -2265,18 +2295,9 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
             <label>Purpose</label>
             <textarea className="pcp-input" rows={2} placeholder="What is this cash advance for?" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} />
           </div>
-          <div className="pcp-field-row">
-            <div className="pcp-field">
-              <label>Amount Requested (₱)</label>
-              <input type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
-            </div>
-            <div className="pcp-field">
-              <label>Scheduled / Release Date</label>
-              <input type="date" className="pcp-input" value={form.scheduledDate} onChange={(e) => set("scheduledDate", e.target.value)} />
-            </div>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--text-mut)", marginTop: -6 }}>
-            Leave as today for an immediate request, or pick a future date to schedule it — it will appear under Future Transactions and won't reduce the current available balance until that date.
+          <div className="pcp-field">
+            <label>Amount Requested (₱)</label>
+            <input type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
           </div>
         </div>
         <div className="pcp-modal-foot">
@@ -2332,7 +2353,7 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
             <table className="pcp-table">
               <thead>
                 <tr>
-                  <th>Request No.</th><th>Date</th><th>Scheduled Date</th><th>Employee</th><th>Department</th><th>Plant</th>
+                  <th>Request No.</th><th>Date</th><th>Employee</th><th>Department</th><th>Plant</th>
                   <th>Purpose</th><th>Amount</th><th>Approver</th><th>Status</th><th></th>
                 </tr>
               </thead>
@@ -2341,7 +2362,6 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
                   <tr key={r.id}>
                     <td>{r.requestNo}</td>
                     <td>{fmtDate(r.date)}</td>
-                    <td>{fmtDate(r.scheduledDate || r.date)}</td>
                     <td>{r.employee}</td>
                     <td title={subaccountLabel(r.department)}>{subaccountLabel(r.department)}</td>
                     <td>{plantLabel(r.branchCode)}</td>
@@ -2366,7 +2386,7 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
                       </div>
                     </td>
                   </tr>
-                )) : <tr><td colSpan={11} className="pcp-empty">No requests match your filters</td></tr>}
+                )) : <tr><td colSpan={10} className="pcp-empty">No requests match your filters</td></tr>}
               </tbody>
             </table>
           </div>
@@ -3102,7 +3122,24 @@ function EditBalancesModal({ funds, onClose, onSave }) {
 
 /* Report for top management: PCF monitoring per fund + every transaction.
    Printable, and exportable to a multi-sheet Excel workbook. */
-function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments, plantTitle }) {
+function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments, plantTitle, generatedBy }) {
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [watermark, setWatermark] = useState(false);
+
+  const reportRefNo = useMemo(
+    () => "RPT-" + todayISO().replace(/-/g, "") + "-" + Math.random().toString(36).slice(2, 7).toUpperCase(),
+    []
+  );
+  const printedAt = useMemo(() => new Date().toLocaleString("en-PH"), []);
+
+  const inRange = useCallback((d) => {
+    if (!d) return true;
+    if (dateFrom && d < dateFrom) return false;
+    if (dateTo && d > dateTo) return false;
+    return true;
+  }, [dateFrom, dateTo]);
+
   const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations, replenishments), [funds, requests, disbursements, liquidations, replenishments]);
 
   const monitoring = useMemo(
@@ -3116,8 +3153,8 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
   }), { beginning: 0, disbursed: 0, liquidated: 0, outstanding: 0, replenished: 0, available: 0 }), [monitoring]);
 
   const disbRows = useMemo(
-    () => [...disbursements].sort((a, b) => (b.date || "").localeCompare(a.date || "")),
-    [disbursements]
+    () => [...disbursements].filter((d) => inRange(d.date)).sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+    [disbursements, inRange]
   );
   const liqRows = useMemo(() => {
     const out = [];
@@ -3125,6 +3162,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
       const liq = liquidationFor(d.id, liquidations);
       if (!liq || !liq.lines) return;
       liq.lines.forEach((l) => {
+        if (!inRange(l.date)) return;
         const expenseDesc = (l.expense && l.expense.trim()) ? l.expense.trim() : l.category;
         out.push({
           voucherNo: d.voucherNo, branchCode: d.branchCode, date: l.date, employee: d.employee,
@@ -3135,7 +3173,18 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
       });
     });
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [disbursements, liquidations]);
+  }, [disbursements, liquidations, inRange]);
+  const liqTotal = useMemo(() => liqRows.reduce((s, l) => s + (Number(l.amount) || 0), 0), [liqRows]);
+
+  /* Single-plant context (used when the Reports tab is scoped to one fund) so
+     the letterhead can show a specific Company / Custodian instead of "All". */
+  const soleFund = funds.length === 1 ? funds[0] : null;
+  const reportCompany = soleFund ? companyOfBranch(soleFund.branchCode) : "All Companies";
+  const reportCustodian = soleFund ? soleFund.custodian : (funds.length ? "Multiple Custodians" : "—");
+  const reportBranch = soleFund ? soleFund.branchCode : (plantTitle || "All Plants");
+  const reportPeriod = (dateFrom || dateTo)
+    ? `${dateFrom ? fmtDate(dateFrom) : "Start"} – ${dateTo ? fmtDate(dateTo) : "Present"}`
+    : "All Dates";
 
   const exportReport = useCallback(() => {
     const wb = XLSX.utils.book_new();
@@ -3167,13 +3216,13 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lRows.length ? lRows : [{}]), "Liquidation Details");
 
-    const rRows = requests.map((r) => ({
-      "Request No.": r.requestNo, "Date": r.date, "Scheduled Date": r.scheduledDate || r.date, "Employee": r.employee, "Branch": r.branchCode,
+    const rRows = requests.filter((r) => inRange(r.date)).map((r) => ({
+      "Request No.": r.requestNo, "Date": r.date, "Employee": r.employee, "Branch": r.branchCode,
       "Department": deptDesc(r.department), "Purpose": r.purpose, "Amount": r.amount, "Approver": r.approver || "", "Status": r.status,
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rRows.length ? rRows : [{}]), "Requests");
 
-    const repRows = (replenishments || []).map((r) => ({
+    const repRows = (replenishments || []).filter((r) => inRange(r.date)).map((r) => ({
       "Replenishment No.": r.replenishmentNo, "Date": r.date, "Branch": r.branchCode,
       "Company": companyOfBranch(r.branchCode), "Amount": r.amount, "Prepared By": r.preparedBy,
       "Status": r.status || "", "Remarks": r.remarks || "",
@@ -3181,7 +3230,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(repRows.length ? repRows : [{}]), "Replenishments");
 
     downloadWorkbook(wb, `PCF_Management_Report_${todayISO()}.xlsx`);
-  }, [monitoring, totals, disbRows, liqRows, requests, liquidations, replenishments]);
+  }, [monitoring, totals, disbRows, liqRows, requests, liquidations, replenishments, inRange]);
 
   return (
     <div>
@@ -3196,13 +3245,44 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
         }
       />
       <div className="pcp-content">
+        <div className="pcp-card pcp-card-pad pcp-no-print" style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 14, alignItems: "flex-end" }}>
+          <div className="pcp-field" style={{ marginBottom: 0 }}>
+            <label>Report Period — From</label>
+            <input type="date" className="pcp-input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          </div>
+          <div className="pcp-field" style={{ marginBottom: 0 }}>
+            <label>Report Period — To</label>
+            <input type="date" className="pcp-input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+          {(dateFrom || dateTo) && (
+            <button className="pcp-btn pcp-btn-sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear</button>
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, marginLeft: "auto", cursor: "pointer" }}>
+            <input type="checkbox" checked={watermark} onChange={(e) => setWatermark(e.target.checked)} />
+            Mark as CONFIDENTIAL
+          </label>
+        </div>
+
+        {watermark && <div className="pcp-report-watermark">CONFIDENTIAL</div>}
+
         <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16 }}>
-          <div className="pcp-report-head">
-            <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
-            <img src={LOGO_SPI} alt="Starkson Paper and Plastic Corporation" />
-            <div style={{ marginLeft: "auto", textAlign: "right" }}>
-              <div className="pcp-report-title">Petty Cash Fund — Management Report</div>
-              <div className="pcp-report-sub">Generated {fmtDate(todayISO())} · A1+ Paper &amp; Plastic Inc. · Starkson Paper &amp; Plastic Corp.</div>
+          <div className="pcp-report-letterhead">
+            <div className="pcp-report-refno">Report Ref. No.<br />{reportRefNo}</div>
+            <div className="pcp-report-letterhead-logos">
+              <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
+              <img src={LOGO_SPI} alt="Starkson Paper and Plastic Corporation" />
+            </div>
+            <div className="pcp-report-company-name">{reportCompany}</div>
+            <div className="pcp-report-portal-name">Petty Cash Fund (PCF) Portal</div>
+            <div className="pcp-report-doc-title">Petty Cash Fund — Management Report</div>
+            <div className="pcp-report-meta-grid">
+              <div className="pcp-report-meta-item"><b>Plant:</b> {plantTitle || "All Plants"}</div>
+              <div className="pcp-report-meta-item"><b>Branch:</b> {reportBranch}</div>
+              <div className="pcp-report-meta-item"><b>Company:</b> {reportCompany}</div>
+              <div className="pcp-report-meta-item"><b>Custodian:</b> {reportCustodian}</div>
+              <div className="pcp-report-meta-item"><b>Report Period:</b> {reportPeriod}</div>
+              <div className="pcp-report-meta-item"><b>Generated By:</b> {generatedBy || "—"}</div>
+              <div className="pcp-report-meta-item"><b>Date Generated:</b> {fmtDate(todayISO())}</div>
             </div>
           </div>
         </div>
@@ -3281,12 +3361,24 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
                     <td>{d.billed ? <Check size={13} color="#15803d" /> : <span style={{ color: "#9098b3" }}>—</span>}</td>
                   </tr>
                 )) : <tr><td colSpan={10} className="pcp-empty">No disbursements recorded</td></tr>}
+                {disbRows.length > 0 && (
+                  <tr><td colSpan={10} className="pcp-report-nothing-follows">*** NOTHING FOLLOWS ***</td></tr>
+                )}
               </tbody>
+              {disbRows.length ? (
+                <tfoot>
+                  <tr>
+                    <td colSpan={7}>TOTAL ({disbRows.length} transaction{disbRows.length === 1 ? "" : "s"})</td>
+                    <td className="pcp-num">{peso(disbRows.reduce((s, d) => s + (Number(d.amount) || 0), 0))}</td>
+                    <td colSpan={2}></td>
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
         </div>
 
-        <div className="pcp-card">
+        <div className="pcp-card" style={{ marginBottom: 16 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", fontWeight: 700, fontSize: 13 }}>Liquidation Details ({liqRows.length})</div>
           <div className="pcp-table-wrap">
             <table className="pcp-table">
@@ -3309,9 +3401,39 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
                     <td className="pcp-num">{peso(l.amount)}</td>
                   </tr>
                 )) : <tr><td colSpan={8} className="pcp-empty">No liquidation lines recorded</td></tr>}
+                {liqRows.length > 0 && (
+                  <tr><td colSpan={8} className="pcp-report-nothing-follows">*** NOTHING FOLLOWS ***</td></tr>
+                )}
               </tbody>
+              {liqRows.length ? (
+                <tfoot>
+                  <tr>
+                    <td colSpan={7}>GRAND TOTAL ({liqRows.length} line{liqRows.length === 1 ? "" : "s"})</td>
+                    <td className="pcp-num">{peso(liqTotal)}</td>
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
+        </div>
+
+        <div className="pcp-card pcp-card-pad pcp-report-signature">
+          <div className="pcp-report-sig-line">
+            <div className="pcp-report-sig-name">{reportCustodian !== "—" ? reportCustodian : "\u00A0"}</div>
+            <div className="pcp-report-sig-role">Prepared by — Custodian</div>
+          </div>
+          <div className="pcp-report-sig-line">
+            <div className="pcp-report-sig-name">&nbsp;</div>
+            <div className="pcp-report-sig-role">Reviewed by — Accounting Manager</div>
+          </div>
+          <div className="pcp-report-sig-line">
+            <div className="pcp-report-sig-name">&nbsp;</div>
+            <div className="pcp-report-sig-role">Approved by — Finance Director</div>
+          </div>
+        </div>
+
+        <div className="pcp-print-footer" style={{ textAlign: "center", fontSize: 10, color: "#9098b3", marginTop: 10 }}>
+          Generated from PCF Portal · Ref. {reportRefNo} · Printed on {printedAt}
         </div>
       </div>
     </div>
@@ -4001,7 +4123,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       id: uid("req"), requestNo: form.requestNo, date: form.date, employee: form.employee,
       department: form.department, branchCode: form.branchCode, purpose: form.purpose,
       amount: Number(form.amount), approver: form.approver, status: "Pending",
-      scheduledDate: form.scheduledDate || form.date,
     }]);
     logAudit("Request Created", form.requestNo, `${form.employee} · ${peso(Number(form.amount))} · ${form.purpose}`);
   }, [logAudit]);
@@ -4010,7 +4131,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     setRequests((rs) => rs.map((r) => (r.id === id ? {
       ...r, date: form.date, employee: form.employee, department: form.department,
       branchCode: form.branchCode, purpose: form.purpose, amount: Number(form.amount),
-      approver: form.approver, scheduledDate: form.scheduledDate || form.date,
+      approver: form.approver,
     } : r)));
     const r = requests.find((x) => x.id === id);
     logAudit("Edited", r ? r.requestNo : id, `Request updated · ${form.employee} · ${peso(Number(form.amount))}`);
@@ -4345,6 +4466,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             key={tab}
             funds={scopedFunds} requests={scopedRequests} disbursements={scopedDisbursements} liquidations={scopedLiquidations} replenishments={scopedReplenishments}
             plantTitle={activePlantLabel}
+            generatedBy={userName || userEmail || "—"}
           />
         )}
         {activeModule === "audit" && (
