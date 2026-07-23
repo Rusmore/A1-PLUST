@@ -58,7 +58,7 @@ const branchesForCompany = (company) => BRANCHES.filter((b) => b.company === com
 
 const seedFunds = () => ([
   { id: "fund-MNL", branchCode: "A1+", label: "Manila", custodian: "Maureen Felix", beginningBalance: 600000 },
-  { id: "fund-DIS", branchCode: "D1", label: "Disney", custodian: "Pura Barloso", beginningBalance: 704035.23 },
+  { id: "fund-DIS", branchCode: "ST", label: "Disney", custodian: "Pura Barloso", beginningBalance: 704035.23 },
   { id: "fund-WAR", branchCode: "WARNER", label: "Warner", custodian: "Angelita Bayani", beginningBalance: 150000 },
   { id: "fund-RG", branchCode: "RG", label: "RG and Co.", custodian: "Pura Barloso", beginningBalance: 300000 },
 ]);
@@ -2034,7 +2034,7 @@ function MiniBarChart({ data, height = 220, layout = "vertical" }) {
 const DASHBOARD_BRANCHES = [
   { key: "MNL", label: "Manila", branchCode: "A1+" },
   { key: "WARNER", label: "Warner", branchCode: "WARNER" },
-  { key: "DISNEY", label: "Disney", branchCode: "D1" },
+  { key: "DISNEY", label: "Disney", branchCode: "ST" },
   { key: "RG", label: "RG and Co.", branchCode: "RG" },
 ];
 
