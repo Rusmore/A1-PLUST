@@ -191,6 +191,15 @@ function downloadWorkbook(wb, filename) {
 const COMPANY_MAIN = "STARKSON PAPER AND PLASTIC CORPORATION";
 const PORTAL_NAME = "PETTY CASH FUND (PCF) PORTAL";
 
+/* Company logo for the reports — resolved from the actual PNG that ships beside
+   index.html so it renders on screen AND inside the print window (a new window
+   opened on about:blank cannot resolve relative paths, so we hand it a fully
+   qualified URL). Falls back to the plain relative path if resolution fails. */
+const REPORT_LOGO = (() => {
+  try { return new URL(encodeURI("SPI PAPER LOGO.png"), document.baseURI).href; }
+  catch (e) { return "SPI PAPER LOGO.png"; }
+})();
+
 /* Currency formatted exactly as requested in the report spec: PHP 1,234,567.89
    (negatives are parenthesised, accounting style). */
 const money = (n) => {
@@ -667,7 +676,7 @@ function reportPrintHTML(doc) {
     <thead>
       <tr><td class="head-cell" colspan="${N}">
         <div class="rhead">
-          <div class="rh-logo"><img src="${LOGO_SPI}" alt="Company logo"/></div>
+          <div class="rh-logo"><img src="${REPORT_LOGO}" alt="Company logo"/></div>
           <div class="rh-center">
             <div class="rh-company">${esc(COMPANY_MAIN)}</div>
             <div class="rh-portal">${esc(PORTAL_NAME)}</div>
@@ -4345,7 +4354,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
           <div className={"pcp-doc " + ort}>
             {watermark && <div className="pcp-doc-wm"><span>CONFIDENTIAL</span></div>}
             <div className="pcp-doc-head">
-              <img src={LOGO_SPI} alt="Company logo" />
+              <img src={REPORT_LOGO} alt="Company logo" />
               <div className="pcp-doc-head-c">
                 <div className="pcp-doc-company">{COMPANY_MAIN}</div>
                 <div className="pcp-doc-portal">{PORTAL_NAME}</div>
