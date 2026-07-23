@@ -57,10 +57,10 @@ const branchesForCompany = (company) => BRANCHES.filter((b) => b.company === com
 /* ============================= SEED DATA ============================= */
 
 const seedFunds = () => ([
-  { id: "fund-MNL", branchCode: "A1+", label: "Manila", custodian: "Maureen Felix", beginningBalance: 600000, status: "Active", lastUpdated: todayISO(), lastUpdatedBy: "System" },
-  { id: "fund-DIS", branchCode: "ST", label: "DISNEY PLANT", custodian: "Pura Barloso", beginningBalance: 700000, status: "Active", lastUpdated: todayISO(), lastUpdatedBy: "System" },
-  { id: "fund-WAR", branchCode: "WARNER", label: "Warner", custodian: "Angelita Bayani", beginningBalance: 150000, status: "Active", lastUpdated: todayISO(), lastUpdatedBy: "System" },
-  { id: "fund-RG", branchCode: "RG", label: "RG and Co.", custodian: "Pura Barloso", beginningBalance: 300000, status: "Active", lastUpdated: todayISO(), lastUpdatedBy: "System" },
+  { id: "fund-MNL", branchCode: "A1+", label: "Manila", custodian: "Maureen Felix", beginningBalance: 600000 },
+  { id: "fund-DIS", branchCode: "ST", label: "Disney", custodian: "Pura Barloso", beginningBalance: 704035.23 },
+  { id: "fund-WAR", branchCode: "WARNER", label: "Warner", custodian: "Angelita Bayani", beginningBalance: 150000 },
+  { id: "fund-RG", branchCode: "RG", label: "RG and Co.", custodian: "Pura Barloso", beginningBalance: 300000 },
 ]);
 
 /* Transaction stores start EMPTY — the system begins with a clean database and
@@ -135,12 +135,7 @@ function computeMetrics(funds, requests, disbursements, liquidations, replenishm
     }
   });
 
-  /* Available Balance formula (per Fund Master requirements):
-     Current Available Balance = Beginning Balance - Total Disbursed + Total Liquidated
-     Projected Available Balance = Current Available Balance - Scheduled/Future Transactions
-     outstanding/totalReplenished are still computed above for informational KPIs
-     (Pending Liquidation, Replenishment status) but no longer feed this formula. */
-  const availableBalance = totalFund - totalDisbursed + totalLiquidated;
+  const availableBalance = totalFund - totalLiquidated - outstanding + totalReplenished;
   const pendingRequests = requests.filter((r) => r.status === "Pending").length;
   const approvedRequests = requests.filter((r) => r.status === "Approved").length;
   const pendingLiquidationCount = disbursements.filter((d) => liqStatusFor(d, liquidations) !== "Fully Liquidated").length;
@@ -151,23 +146,11 @@ function computeMetrics(funds, requests, disbursements, liquidations, replenishm
   const monthlyExpenses = liquidations.reduce((s, l) =>
     s + l.lines.reduce((ls, ln) => ls + ((ln.date || "").slice(0, 7) === nowMonth ? (Number(ln.amount) || 0) : 0), 0), 0);
 
-  /* Scheduled/Future Transactions — approved requests not yet disbursed whose
-     scheduled (or request) date is after today. These are projected only:
-     they do NOT reduce the Current Available Balance, only the Projected one. */
-  const today = todayISO();
-  const futureTransactions = requests.filter((r) =>
-    r.status === "Approved" && (r.scheduledDate || r.date) > today
-  );
-  const scheduledFutureTotal = futureTransactions.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-  const scheduledFutureCount = futureTransactions.length;
-  const projectedAvailableBalance = availableBalance - scheduledFutureTotal;
-
   return {
     totalFund, totalDisbursed, totalLiquidated, totalReplenished, outstanding, availableBalance,
     pendingRequests, approvedRequests, pendingLiquidationCount, pendingReplenishments,
     monthlyExpenses, completedBilled,
     activeEmployeeCount: activeEmployees.size,
-    futureTransactions, scheduledFutureTotal, scheduledFutureCount, projectedAvailableBalance,
   };
 }
 
@@ -189,9 +172,109 @@ function monitoringForFund(fund, disbursements, liquidations, replenishments) {
     .filter((r) => r.branchCode === fund.branchCode && r.status === "Completed")
     .reduce((s, r) => s + (Number(r.amount) || 0), 0);
   const beginning = Number(fund.beginningBalance) || 0;
-  /* Current Available Balance = Beginning Balance - Total Disbursed + Total Liquidated */
-  const available = beginning - disbursed + liquidated;
+  const available = beginning - liquidated - outstanding + replenished;
   return { beginning, disbursed, liquidated, outstanding, replenished, available };
+}
+
+/* ============================= LIQUIDATION AGING ENGINE ============================= */
+
+/* Standard number of days a custodian/employee has to liquidate a released
+   cash advance before it becomes overdue. One uniform rule applied to every
+   plant/company — no per-plant configuration needed. */
+const LIQUIDATION_DUE_DAYS = 15;
+
+const addDaysISO = (iso, days) => {
+  const d = new Date((iso || todayISO()) + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+const AGING_BUCKETS = ["Current", "Due Today", "1-15 Days Overdue", "16-30 Days Overdue", "31-60 Days Overdue", "Over 60 Days Overdue", "Completed"];
+
+/* Aging classification for a single disbursement: its liquidation due date,
+   how many days past due (0 if not yet due) and which aging bucket it falls
+   into as of today. Run automatically for every transaction, every plant. */
+function agingInfoFor(disb, liquidations, asOf) {
+  const today = asOf || todayISO();
+  const liqStatus = liqStatusFor(disb, liquidations);
+  const dueDate = addDaysISO(disb.date, LIQUIDATION_DUE_DAYS);
+  const daysOverdue = Math.max(0, Math.floor((new Date(today + "T00:00:00") - new Date(dueDate + "T00:00:00")) / 86400000));
+  let bucket;
+  if (liqStatus === "Fully Liquidated" || liqStatus === "Over-Liquidated") bucket = "Completed";
+  else if (today < dueDate) bucket = "Current";
+  else if (today === dueDate) bucket = "Due Today";
+  else if (daysOverdue <= 15) bucket = "1-15 Days Overdue";
+  else if (daysOverdue <= 30) bucket = "16-30 Days Overdue";
+  else if (daysOverdue <= 60) bucket = "31-60 Days Overdue";
+  else bucket = "Over 60 Days Overdue";
+  return {
+    liqStatus, dueDate, daysOverdue, bucket,
+    isOverdue: bucket.indexOf("Overdue") !== -1, isDueToday: bucket === "Due Today", isCompleted: bucket === "Completed",
+  };
+}
+
+/* Flatten every disbursement (across whichever funds/plants are supplied)
+   into one aging row per transaction — the row-level dataset the aging
+   report filters, drills down into, and exports. */
+function buildAgingRows(funds, disbursements, liquidations) {
+  const fundByBranch = new Map(funds.map((f) => [f.branchCode, f]));
+  return disbursements
+    .filter((d) => fundByBranch.has(d.branchCode))
+    .map((d) => {
+      const f = fundByBranch.get(d.branchCode);
+      const info = agingInfoFor(d, liquidations);
+      const already = liquidatedTotal(liquidationFor(d.id, liquidations));
+      return {
+        id: d.id, voucherNo: d.voucherNo, date: d.date, employee: d.employee,
+        department: d.department, branchCode: d.branchCode, plantLabel: f.label,
+        custodian: f.custodian, company: companyOfBranch(d.branchCode),
+        amount: Number(d.amount) || 0, liquidated: already,
+        outstanding: info.isCompleted ? 0 : Math.max(0, (Number(d.amount) || 0) - already),
+        ...info,
+      };
+    });
+}
+
+/* Consolidate aging by plant/fund. Funds ARE the live plant registry
+   (Funds & Master Data), so any plant added there — Manila, Disney, Warner,
+   RG and Co., or a brand-new one — is picked up automatically, with zero
+   code changes. */
+function aggregatePlantAging(funds, disbursements, liquidations, replenishments) {
+  return funds.map((f) => {
+    const mon = monitoringForFund(f, disbursements, liquidations, replenishments);
+    const rows = buildAgingRows([f], disbursements, liquidations);
+    let pending = 0, dueToday = 0, overdue = 0, completed = 0;
+    rows.forEach((r) => {
+      if (r.isCompleted) completed++;
+      else {
+        pending++;
+        if (r.isDueToday) dueToday++;
+        if (r.isOverdue) overdue++;
+      }
+    });
+    const totalTx = rows.length;
+    const complianceRate = totalTx ? Math.round(((totalTx - overdue) / totalTx) * 1000) / 10 : 100;
+    return {
+      fund: f, plantLabel: f.label, branchCode: f.branchCode, company: companyOfBranch(f.branchCode),
+      custodian: f.custodian, beginning: mon.beginning, released: mon.disbursed, liquidated: mon.liquidated,
+      outstanding: mon.outstanding, pending, dueToday, overdue, completed, totalTx, complianceRate,
+    };
+  });
+}
+
+/* Group aging rows by an arbitrary dimension for the Management Reports
+   section ("All Plants", "Per Plant", "Per Company", "Per Branch", "Per
+   Custodian" all reduce to a groupBy key). */
+function groupAgingRows(rows, keyFn) {
+  const map = new Map();
+  rows.forEach((r) => {
+    const k = keyFn(r) || "Unassigned";
+    if (!map.has(k)) map.set(k, { key: k, count: 0, released: 0, liquidated: 0, outstanding: 0, overdue: 0 });
+    const g = map.get(k);
+    g.count++; g.released += r.amount; g.liquidated += r.liquidated; g.outstanding += r.outstanding;
+    if (r.isOverdue) g.overdue++;
+  });
+  return Array.from(map.values()).sort((a, b) => b.outstanding - a.outstanding);
 }
 
 function downloadWorkbook(wb, filename) {
@@ -396,7 +479,7 @@ const COMPANIES = [
 const PLANTS = [
   { key: "MNL", code: "A1+", label: "Manila", custodian: "Maureen Felix" },
   { key: "WARNER", code: "WARNER", label: "Warner", custodian: "Angelita Bayani" },
-  { key: "DISNEY", code: "ST", label: "Disney", custodian: "Pura Barloso" },
+  { key: "DISNEY", code: "D1", label: "Disney", custodian: "Pura Barloso" },
   { key: "RG", code: "RG", label: "RG and Co.", custodian: "Pura Barloso" },
 ];
 const PLANT_CODES = PLANTS.map((p) => p.code);
@@ -1012,20 +1095,31 @@ const taxCategoryLabel = (code) => {
 /* ============================= USER ROLES ============================= */
 
 /* Each role only sees the nav tabs relevant to it. Plant-level data access is
-   controlled separately (per user) so a custodian only sees their own plants. */
+   controlled separately (per user) so a custodian only sees their own plants —
+   every module (dashboards, reports, aging, exports, audit) reads from the
+   same plant-scoped "visible*" data in <App/>, so access control is enforced
+   once, consistently, everywhere, rather than per-feature. A new tab key
+   added to a role's list here is all that's needed for that role to see a
+   feature in the sidebar — no other wiring required. */
 const ROLES = {
-  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata", "users", "settings"] },
-  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "audit", "masterdata"] },
-  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report"] },
+  "Administrator": { label: "Administrator",              tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "agingreport", "audit", "masterdata", "users", "settings"] },
+  "Accounting":    { label: "Accounting Department",       tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "agingreport", "audit", "masterdata", "users", "settings"] },
+  "Finance":       { label: "Finance Manager / Director",  tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "agingreport", "audit", "masterdata", "users", "settings"] },
+  "Custodian":      { label: "Custodian",                  tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "agingreport"] },
+  "Approver":       { label: "Approver",                   tabs: ["dashboard", "requests", "history", "report", "agingreport"] },
 };
 const ROLE_NAMES = Object.keys(ROLES);
+/* Roles with unrestricted, system-wide access (all modules and system
+   settings). Everyone else is limited to their assigned plant(s) via
+   userPlants, enforced centrally in <App/>. */
+const FULL_ACCESS_ROLES = ["Administrator", "Accounting", "Finance"];
 
 /* Decide a signed-in user's role, admin status and plant scope from the config
-   in index.html (window.PCP_USERS). Accounting is the full super-admin. In
-   local (no-auth) mode the operator is treated as Accounting super-admin so the
-   tool stays fully usable offline. */
+   in index.html (window.PCP_USERS). Administrator/Accounting/Finance are full
+   super-admins. In local (no-auth) mode the operator is treated as
+   Administrator so the tool stays fully usable offline. */
 function resolveUserAccess(email) {
-  if (!email) return { role: "Accounting", isAdmin: true, plants: "ALL", name: "Administrator" };
+  if (!email) return { role: "Administrator", isAdmin: true, plants: "ALL", name: "Administrator" };
   const users = window.PCP_USERS || {};
   const admins = (window.PCP_ADMIN_EMAILS || []).map((s) => String(s).toLowerCase());
   const e = String(email).toLowerCase();
@@ -1033,10 +1127,10 @@ function resolveUserAccess(email) {
   const u = users[e] || users[username];
   if (u) {
     const role = ROLES[u.role] ? u.role : "Custodian";
-    const isAdmin = role === "Accounting" || admins.includes(e) || admins.includes(username);
+    const isAdmin = FULL_ACCESS_ROLES.includes(role) || admins.includes(e) || admins.includes(username);
     return { role, isAdmin, plants: u.plants || "ALL", name: u.name || email };
   }
-  if (admins.includes(e) || admins.includes(username)) return { role: "Accounting", isAdmin: true, plants: "ALL", name: email };
+  if (admins.includes(e) || admins.includes(username)) return { role: "Administrator", isAdmin: true, plants: "ALL", name: email };
   const fb = (window.PCP_DEFAULT_ROLE && ROLES[window.PCP_DEFAULT_ROLE]) ? window.PCP_DEFAULT_ROLE : "Custodian";
   return { role: fb, isAdmin: false, plants: [], name: email };
 }
@@ -1483,6 +1577,44 @@ const CSS = `
   .pcp-modal-body { padding: 20px 22px; max-height: 65vh; overflow-y: auto; }
   .pcp-modal-foot { padding: 14px 22px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
 
+  /* ---- Drill-down modal (dashboard chart click-through) ---- */
+  .pcp-drill-modal { max-width: 1180px; display: flex; flex-direction: column; max-height: 90vh; }
+  .pcp-drill-head { padding: 16px 22px; border-bottom: 1px solid var(--line); }
+  .pcp-breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 11px; color: var(--text-mut); font-weight: 600; margin-bottom: 6px; }
+  .pcp-breadcrumb .pcp-crumb-current { color: var(--brand); }
+  .pcp-breadcrumb svg { color: #c3c7d4; }
+  .pcp-drill-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .pcp-drill-title-row h3 { margin: 0; font-size: 16px; font-weight: 700; }
+  .pcp-drill-count { font-size: 11.5px; color: var(--text-mut); font-weight: 600; }
+  .pcp-drill-toolbar {
+    padding: 12px 22px; border-bottom: 1px solid var(--line); display: flex; gap: 8px;
+    align-items: center; flex-wrap: wrap; background: #fbfbfd;
+  }
+  .pcp-drill-toolbar .pcp-input, .pcp-drill-toolbar .pcp-select { width: auto; }
+  .pcp-drill-body { padding: 0; overflow-y: auto; flex: 1; min-height: 120px; }
+  .pcp-drill-table-wrap { overflow: auto; }
+  .pcp-drill-foot {
+    padding: 12px 22px; border-top: 1px solid var(--line); display: flex; align-items: center;
+    justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  }
+  .pcp-pagination { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-mut); }
+  .pcp-pagination button { padding: 4px 9px; }
+  .pcp-row-click { cursor: pointer; }
+  .pcp-row-click:hover { background: var(--red-bg) !important; }
+  .pcp-detail-drawer { border-top: 2px solid var(--line); background: #fbfbfd; padding: 18px 22px; animation: pcpDrawerIn 0.16s ease; }
+  @keyframes pcpDrawerIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+  .pcp-detail-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 18px; margin-bottom: 14px; }
+  .pcp-detail-field-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-mut); font-weight: 700; }
+  .pcp-detail-field-value { font-size: 13px; font-weight: 600; margin-top: 2px; }
+
+  .pcp-chart-click { cursor: pointer; }
+  .pcp-chart-hint { font-size: 10.5px; color: var(--text-mut); font-weight: 500; margin-left: auto; }
+  .pcp-section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+  .pcp-modal-backdrop.pcp-drill-backdrop { animation: pcpFadeIn 0.15s ease; }
+  .pcp-drill-modal { animation: pcpModalIn 0.18s ease; }
+  @keyframes pcpFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes pcpModalIn { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
   .pcp-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
   .pcp-tab {
     padding: 9px 14px; font-size: 12.5px; font-weight: 600; color: var(--text-mut);
@@ -1491,6 +1623,22 @@ const CSS = `
   .pcp-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
 
   .pcp-empty { text-align: center; padding: 40px 20px; color: var(--text-mut); }
+
+  .pcp-branch-info {
+    display: flex; flex-wrap: wrap; gap: 0; background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; margin-bottom: 16px; overflow: hidden;
+  }
+  .pcp-branch-info-item {
+    flex: 1; min-width: 200px; display: flex; align-items: center; gap: 12px; padding: 14px 18px;
+  }
+  .pcp-branch-info-item + .pcp-branch-info-item { border-left: 1px solid var(--line); }
+  .pcp-branch-info-icon {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--red-bg); color: var(--brand);
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .pcp-branch-info-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-mut); }
+  .pcp-branch-info-value { font-size: 13.5px; font-weight: 700; margin-top: 2px; color: var(--text); }
+
   .pcp-flow {
     display: flex; align-items: stretch; gap: 0; background: var(--ink);
     border-radius: 12px; overflow: hidden; margin-bottom: 18px;
@@ -1602,13 +1750,51 @@ const CSS = `
   }
 
   /* ---- Print (management report) ---- */
+  @page { size: A4 portrait; margin: 14mm 12mm; }
   @media print {
     .pcp-sidebar, .pcp-topbar, .pcp-tabs, .pcp-no-print { display: none !important; }
     .pcp-root { display: block; }
     .pcp-content { padding: 0 !important; }
     .pcp-card { border: 1px solid #ccc; break-inside: avoid; }
     body, .pcp-root { background: #fff !important; }
+    table.pcp-table thead { display: table-header-group; }
+    table.pcp-table tfoot { display: table-footer-group; }
     table.pcp-table thead th { background: #f0f0f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    table.pcp-table tbody tr:nth-child(even) td { background: #f7f8fa !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .pcp-report-letterhead { break-after: avoid; break-inside: avoid; }
+    .pcp-report-signature { break-inside: avoid; }
+    .pcp-print-footer { display: block !important; }
+  }
+  .pcp-print-footer { display: none; }
+
+  /* ---- Report letterhead / meta / signatures (print-ready reports) ---- */
+  .pcp-report-letterhead {
+    text-align: center; padding: 6px 0 16px; border-bottom: 2px solid var(--ink); margin-bottom: 14px; position: relative;
+  }
+  .pcp-report-letterhead-logos { display: flex; align-items: center; justify-content: center; gap: 18px; margin-bottom: 8px; }
+  .pcp-report-letterhead-logos img { max-height: 44px; max-width: 120px; object-fit: contain; }
+  .pcp-report-company-name { font-size: 15px; font-weight: 800; letter-spacing: 0.4px; text-transform: uppercase; }
+  .pcp-report-portal-name { font-size: 11px; color: var(--text-mut); font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; margin-top: 2px; }
+  .pcp-report-doc-title { font-size: 18px; font-weight: 800; margin-top: 10px; letter-spacing: -0.2px; }
+  .pcp-report-meta-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 24px; text-align: left;
+    max-width: 760px; margin: 14px auto 0; font-size: 11.5px;
+  }
+  .pcp-report-meta-item { display: flex; gap: 6px; }
+  .pcp-report-meta-item b { color: var(--text-mut); font-weight: 700; min-width: 92px; }
+  .pcp-report-refno { position: absolute; top: 0; right: 0; font-size: 10px; color: var(--text-mut); text-align: right; }
+
+  .pcp-report-nothing-follows { text-align: center; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; color: var(--text-mut); padding: 10px !important; }
+
+  .pcp-report-signature { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 34px; padding-top: 6px; }
+  .pcp-report-sig-line { border-top: 1px solid var(--ink); margin-top: 34px; padding-top: 6px; text-align: center; }
+  .pcp-report-sig-name { font-size: 12px; font-weight: 700; }
+  .pcp-report-sig-role { font-size: 10.5px; color: var(--text-mut); }
+
+  .pcp-report-watermark {
+    position: fixed; top: 45%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg);
+    font-size: 70px; font-weight: 800; color: rgba(200, 16, 46, 0.12); letter-spacing: 6px;
+    pointer-events: none; z-index: 0; white-space: nowrap; -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }
 `;
 
@@ -1642,6 +1828,7 @@ const PLANT_MODULE_KEYS = PLANT_MODULES.map((m) => m.key);
 
 /* System-wide modules that stay as a single shared tab (not per plant). */
 const GLOBAL_MODULES = [
+  { key: "agingreport", label: "Liquidation Aging Report", icon: TrendingUp },
   { key: "audit", label: "Audit Trail", icon: ShieldCheck },
   { key: "masterdata", label: "Funds & Master Data", icon: Database },
   { key: "users", label: "User Management", icon: UserCog },
@@ -1813,7 +2000,6 @@ function Badge({ status }) {
     "Not Liquidated": "amber", "Partially Liquidated": "blue",
     "Fully Liquidated": "green", "Over-Liquidated": "red",
     Draft: "gray", Submitted: "amber", Verified: "blue", Completed: "green", Released: "green",
-    Active: "green", Inactive: "gray",
   };
   const cls = map[status] || "gray";
   return <span className={`pcp-badge pcp-badge-${cls}`}>{status}</span>;
@@ -1859,27 +2045,39 @@ function groupSum(items, keyFn, valFn) {
   return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
 }
 
-function MiniBarChart({ data, height = 220, layout = "vertical" }) {
+function MiniBarChart({ data, height = 220, layout = "vertical", onBarClick }) {
   if (!data.length) return <div className="pcp-empty">No data yet</div>;
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={data} layout={layout === "vertical" ? "vertical" : "horizontal"} margin={{ left: 8, right: 18, top: 4, bottom: 4 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" horizontal={layout !== "vertical"} vertical={layout === "vertical"} />
-        {layout === "vertical" ? (
-          <>
-            <XAxis type="number" tickFormatter={shortPeso} fontSize={10.5} stroke="#9098b3" />
-            <YAxis type="category" dataKey="name" width={120} fontSize={10.5} stroke="#9098b3" />
-          </>
-        ) : (
-          <>
-            <XAxis dataKey="name" fontSize={10.5} stroke="#9098b3" />
-            <YAxis tickFormatter={shortPeso} fontSize={10.5} stroke="#9098b3" />
-          </>
-        )}
-        <Tooltip formatter={(v) => peso(v)} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }} />
-        <Bar dataKey="value" fill="#c8102e" radius={[4, 4, 4, 4]} maxBarSize={22} />
-      </BarChart>
-    </ResponsiveContainer>
+    <div
+      className={onBarClick ? "pcp-chart-click" : undefined}
+      title={onBarClick ? "Click to view detailed transactions." : undefined}
+    >
+      <ResponsiveContainer width="100%" height={height}>
+        <BarChart data={data} layout={layout === "vertical" ? "vertical" : "horizontal"} margin={{ left: 8, right: 18, top: 4, bottom: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" horizontal={layout !== "vertical"} vertical={layout === "vertical"} />
+          {layout === "vertical" ? (
+            <>
+              <XAxis type="number" tickFormatter={shortPeso} fontSize={10.5} stroke="#9098b3" />
+              <YAxis type="category" dataKey="name" width={120} fontSize={10.5} stroke="#9098b3" />
+            </>
+          ) : (
+            <>
+              <XAxis dataKey="name" fontSize={10.5} stroke="#9098b3" />
+              <YAxis tickFormatter={shortPeso} fontSize={10.5} stroke="#9098b3" />
+            </>
+          )}
+          <Tooltip
+            formatter={(v) => peso(v)}
+            contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }}
+            labelFormatter={(l) => (onBarClick ? `${l} — click to view` : l)}
+          />
+          <Bar
+            dataKey="value" fill="#c8102e" radius={[4, 4, 4, 4]} maxBarSize={22}
+            onClick={onBarClick ? (entry) => onBarClick(entry) : undefined}
+          />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -1889,6 +2087,125 @@ const DASHBOARD_BRANCHES = [
   { key: "DISNEY", label: "Disney", branchCode: "ST" },
   { key: "RG", label: "RG and Co.", branchCode: "RG" },
 ];
+
+/* ============================= DASHBOARD DRILL-DOWN HELPERS ============================= */
+
+function buildDisbDrillRow(d, requests, liquidations) {
+  const req = (requests || []).find((r) => r.id === d.requestId);
+  const liq = liquidationFor(d.id, liquidations);
+  const liquidatedAmt = liquidatedTotal(liq);
+  const amt = Number(d.amount) || 0;
+  return {
+    id: d.id,
+    requestNo: req ? req.requestNo : "—",
+    voucherNo: d.voucherNo,
+    date: d.date,
+    dateRequested: req ? req.date : d.date,
+    liquidationDate: liq ? liq.createdDate : "",
+    company: companyOfBranch(d.branchCode),
+    branchCode: d.branchCode,
+    department: subaccountLabel(d.department),
+    requestor: req ? req.employee : d.employee,
+    payee: d.employee,
+    purpose: req ? req.purpose : (d.remarks || ""),
+    expenseCategory: d.expenseCategory,
+    amount: amt,
+    amountRequested: amt,
+    amountLiquidated: liquidatedAmt,
+    remainingBalance: Math.max(0, amt - liquidatedAmt),
+    status: d.status,
+    liqStatus: liqStatusFor(d, liquidations),
+    attachments: liq ? (liq.attachments || []) : [],
+    _disb: d,
+  };
+}
+
+function buildLiqLineDrillRows(disbursements, liquidations) {
+  const rows = [];
+  liquidations.forEach((liq) => {
+    const d = disbursements.find((x) => x.id === liq.disbursementId);
+    if (!d) return;
+    (liq.lines || []).forEach((l) => {
+      rows.push({
+        id: l.id,
+        date: l.date,
+        voucherNo: d.voucherNo,
+        liquidationRef: d.voucherNo,
+        company: companyOfBranch(d.branchCode),
+        branchCode: d.branchCode,
+        department: deptDesc(l.department),
+        description: (l.expense && l.expense.trim()) ? l.expense.trim() : l.category,
+        category: l.category,
+        amount: Number(l.amount) || 0,
+        taxCategory: l.taxCategory || "",
+        requestor: d.employee,
+        payee: d.employee,
+        attachments: liq.attachments || [],
+        _disb: d,
+      });
+    });
+  });
+  return rows;
+}
+
+const DRILL_COLUMNS = {
+  liqStatus: [
+    { key: "requestNo", label: "Request No." },
+    { key: "dateRequested", label: "Date Requested", render: (r) => fmtDate(r.dateRequested) },
+    { key: "liquidationDate", label: "Liquidation Date", render: (r) => (r.liquidationDate ? fmtDate(r.liquidationDate) : "—") },
+    { key: "company", label: "Company" },
+    { key: "branchCode", label: "Branch" },
+    { key: "department", label: "Department" },
+    { key: "requestor", label: "Requestor" },
+    { key: "payee", label: "Payee" },
+    { key: "purpose", label: "Purpose" },
+    { key: "amountRequested", label: "Amount Requested", align: "right", render: (r) => peso(r.amountRequested) },
+    { key: "amountLiquidated", label: "Amount Liquidated", align: "right", render: (r) => peso(r.amountLiquidated) },
+    { key: "remainingBalance", label: "Remaining Balance", align: "right", render: (r) => peso(r.remainingBalance) },
+    { key: "liqStatus", label: "Status", render: (r) => <Badge status={r.liqStatus} /> },
+  ],
+  branch: [
+    { key: "date", label: "Date", render: (r) => fmtDate(r.date) },
+    { key: "requestNo", label: "Request No." },
+    { key: "company", label: "Company" },
+    { key: "department", label: "Department" },
+    { key: "expenseCategory", label: "Expense Category" },
+    { key: "payee", label: "Payee" },
+    { key: "amount", label: "Amount", align: "right", render: (r) => peso(r.amount) },
+    { key: "status", label: "Status" },
+    { key: "liqStatus", label: "Liquidation Status", render: (r) => <Badge status={r.liqStatus} /> },
+  ],
+  topCategory: [
+    { key: "date", label: "Date", render: (r) => fmtDate(r.date) },
+    { key: "branchCode", label: "Branch" },
+    { key: "company", label: "Company" },
+    { key: "department", label: "Department" },
+    { key: "description", label: "Description" },
+    { key: "amount", label: "Amount", align: "right", render: (r) => peso(r.amount) },
+    { key: "liquidationRef", label: "Liquidation Reference" },
+    {
+      key: "attachments", label: "Uploaded Receipt", sortable: false,
+      render: (r) => (r.attachments && r.attachments.length
+        ? <span style={{ color: "#15803d", fontWeight: 700 }}>{r.attachments.length} file(s)</span>
+        : <span style={{ color: "var(--text-mut)" }}>None</span>),
+      exportValue: (r) => (r.attachments ? r.attachments.length : 0),
+    },
+    { key: "requestor", label: "Requestor" },
+  ],
+};
+DRILL_COLUMNS.company = [
+  { key: "date", label: "Date", render: (r) => fmtDate(r.date) },
+  { key: "requestNo", label: "Request No." },
+  { key: "branchCode", label: "Branch" },
+  { key: "department", label: "Department" },
+  { key: "expenseCategory", label: "Expense Category" },
+  { key: "payee", label: "Payee" },
+  { key: "amount", label: "Amount", align: "right", render: (r) => peso(r.amount) },
+  { key: "status", label: "Status" },
+  { key: "liqStatus", label: "Liquidation Status", render: (r) => <Badge status={r.liqStatus} /> },
+];
+DRILL_COLUMNS.department = DRILL_COLUMNS.company;
+DRILL_COLUMNS.expenseCategory = DRILL_COLUMNS.branch;
 
 function Dashboard({ funds, requests, disbursements, liquidations, replenishments, onNavigate }) {
   const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations, replenishments), [funds, requests, disbursements, liquidations, replenishments]);
@@ -1929,6 +2246,50 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
   const recentLiquidations = useMemo(() =>
     [...liquidations].sort((a, b) => (b.createdDate || "").localeCompare(a.createdDate || "")).slice(0, 5),
     [liquidations]);
+
+  /* ---- Drill-down state: clicking any chart populates `drill`, which
+     the DrillDownModal renders. Row sets are only computed on click. ---- */
+  const [drill, setDrill] = useState(null);
+
+  const openLiqStatusDrill = useCallback((status) => {
+    if (!status) return;
+    const rows = disbursements
+      .map((d) => buildDisbDrillRow(d, requests, liquidations))
+      .filter((r) => r.liqStatus === status);
+    setDrill({ key: "liqStatus-" + status, chartLabel: "Liquidation Status", valueLabel: status, columns: DRILL_COLUMNS.liqStatus, rows });
+  }, [disbursements, requests, liquidations]);
+
+  const openBranchDrill = useCallback((branchCode) => {
+    if (!branchCode) return;
+    const rows = disbursements.filter((d) => d.branchCode === branchCode).map((d) => buildDisbDrillRow(d, requests, liquidations));
+    setDrill({ key: "branch-" + branchCode, chartLabel: "Disbursements by Branch", valueLabel: branchCode, columns: DRILL_COLUMNS.branch, rows });
+  }, [disbursements, requests, liquidations]);
+
+  const openCompanyDrill = useCallback((company) => {
+    if (!company) return;
+    const rows = disbursements.filter((d) => companyOfBranch(d.branchCode) === company).map((d) => buildDisbDrillRow(d, requests, liquidations));
+    setDrill({ key: "company-" + company, chartLabel: "Disbursements by Company", valueLabel: company, columns: DRILL_COLUMNS.company, rows });
+  }, [disbursements, requests, liquidations]);
+
+  const openDeptDrill = useCallback((deptLabel) => {
+    if (!deptLabel) return;
+    const rows = disbursements
+      .filter((d) => subaccountLabel(d.department) === deptLabel)
+      .map((d) => buildDisbDrillRow(d, requests, liquidations));
+    setDrill({ key: "dept-" + deptLabel, chartLabel: "Disbursements by Department", valueLabel: deptLabel, columns: DRILL_COLUMNS.department, rows });
+  }, [disbursements, requests, liquidations]);
+
+  const openTopCategoryDrill = useCallback((category) => {
+    if (!category) return;
+    const rows = buildLiqLineDrillRows(disbursements, liquidations).filter((r) => r.category === category);
+    setDrill({ key: "topcat-" + category, chartLabel: "Top Expense Categories (Liquidated)", valueLabel: category, columns: DRILL_COLUMNS.topCategory, rows });
+  }, [disbursements, liquidations]);
+
+  const openExpenseCategoryDrill = useCallback((category) => {
+    if (!category) return;
+    const rows = disbursements.filter((d) => d.expenseCategory === category).map((d) => buildDisbDrillRow(d, requests, liquidations));
+    setDrill({ key: "expcat-" + category, chartLabel: "Disbursements by Expense Category", valueLabel: category, columns: DRILL_COLUMNS.expenseCategory, rows });
+  }, [disbursements, requests, liquidations]);
 
   return (
     <div>
@@ -1987,44 +2348,62 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
           ) : <div className="pcp-empty">No liquidated expenses recorded yet</div>}
         </div>
         <div className="pcp-card pcp-card-pad">
-          <div className="pcp-section-title"><FileSpreadsheet size={15} color="#c8102e" /> Liquidation Status</div>
+          <div className="pcp-section-title-row">
+            <div className="pcp-section-title"><FileSpreadsheet size={15} color="#c8102e" /> Liquidation Status</div>
+            {liqStatusCounts.length > 0 && <span className="pcp-chart-hint">Click to view detailed transactions.</span>}
+          </div>
           {liqStatusCounts.length ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <PieChart>
-                <Pie data={liqStatusCounts} dataKey="value" nameKey="name" innerRadius={45} outerRadius={78} paddingAngle={2}>
-                  {liqStatusCounts.map((entry, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-                </Pie>
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div className="pcp-chart-click" title="Click to view detailed transactions.">
+              <ResponsiveContainer width="100%" height={220}>
+                <PieChart>
+                  <Pie
+                    data={liqStatusCounts} dataKey="value" nameKey="name" innerRadius={45} outerRadius={78} paddingAngle={2}
+                    onClick={(entry) => openLiqStatusDrill(entry && entry.name)}
+                  >
+                    {liqStatusCounts.map((entry, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                  </Pie>
+                  <Legend wrapperStyle={{ fontSize: 11, cursor: "pointer" }} onClick={(entry) => openLiqStatusDrill(entry && entry.value)} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           ) : <div className="pcp-empty">No vouchers yet</div>}
         </div>
       </div>
 
       <div className="pcp-grid-3" style={{ marginBottom: 16 }}>
         <div className="pcp-card pcp-card-pad">
-          <div className="pcp-section-title">Disbursements by Branch</div>
-          <MiniBarChart data={byBranch} />
+          <div className="pcp-section-title-row">
+            <div className="pcp-section-title">Disbursements by Branch</div>
+          </div>
+          <MiniBarChart data={byBranch} onBarClick={(entry) => openBranchDrill(entry && entry.name)} />
         </div>
         <div className="pcp-card pcp-card-pad">
-          <div className="pcp-section-title">Disbursements by Company</div>
-          <MiniBarChart data={byCompany} />
+          <div className="pcp-section-title-row">
+            <div className="pcp-section-title">Disbursements by Company</div>
+          </div>
+          <MiniBarChart data={byCompany} onBarClick={(entry) => openCompanyDrill(entry && entry.name)} />
         </div>
         <div className="pcp-card pcp-card-pad">
-          <div className="pcp-section-title">Disbursements by Department</div>
-          <MiniBarChart data={byDept} />
+          <div className="pcp-section-title-row">
+            <div className="pcp-section-title">Disbursements by Department</div>
+          </div>
+          <MiniBarChart data={byDept} onBarClick={(entry) => openDeptDrill(entry && entry.name)} />
         </div>
       </div>
 
       <div className="pcp-grid-2" style={{ marginBottom: 16 }}>
         <div className="pcp-card pcp-card-pad">
-          <div className="pcp-section-title">Top Expense Categories (Liquidated)</div>
-          <MiniBarChart data={topCategories} />
+          <div className="pcp-section-title-row">
+            <div className="pcp-section-title">Top Expense Categories (Liquidated)</div>
+          </div>
+          <MiniBarChart data={topCategories} onBarClick={(entry) => openTopCategoryDrill(entry && entry.name)} />
         </div>
         <div className="pcp-card pcp-card-pad">
-          <div className="pcp-section-title">Disbursements by Expense Category</div>
-          <MiniBarChart data={byCategory} />
+          <div className="pcp-section-title-row">
+            <div className="pcp-section-title">Disbursements by Expense Category</div>
+          </div>
+          <MiniBarChart data={byCategory} onBarClick={(entry) => openExpenseCategoryDrill(entry && entry.name)} />
         </div>
       </div>
 
@@ -2072,6 +2451,258 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
           </div>
         </div>
       </div>
+
+      {drill && <DrillDownModal drill={drill} onClose={() => setDrill(null)} onNavigate={onNavigate} />}
+    </div>
+  );
+}
+
+/* ============================= DRILL-DOWN MODAL ============================= */
+/* Generic click-through table used by every dashboard chart. Supports search,
+   date range + advanced filters, sorting, pagination, export to Excel,
+   print/PDF, and an inline "Transaction Details" drawer per row. */
+
+const DRILL_PAGE_SIZE = 10;
+
+function DrillDownModal({ drill, onClose, onNavigate }) {
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [branchFilter, setBranchFilter] = useState("All");
+  const [companyFilter, setCompanyFilter] = useState("All");
+  const [deptFilter, setDeptFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("desc");
+  const [page, setPage] = useState(1);
+  const [detailRow, setDetailRow] = useState(null);
+
+  // Reset all filters/paging whenever a different chart segment is opened.
+  useEffect(() => {
+    setSearch(""); setDateFrom(""); setDateTo("");
+    setBranchFilter("All"); setCompanyFilter("All"); setDeptFilter("All"); setStatusFilter("All");
+    setSortKey(null); setSortDir("desc"); setPage(1); setDetailRow(null);
+  }, [drill.key]);
+
+  const rows = drill.rows;
+  const hasField = (f) => rows.some((r) => r[f] !== undefined && r[f] !== null && r[f] !== "");
+  const branchOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.branchCode).filter(Boolean))).sort(), [rows]);
+  const companyOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.company).filter(Boolean))).sort(), [rows]);
+  const deptOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.department).filter(Boolean))).sort(), [rows]);
+  const statusOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.liqStatus || r.status).filter(Boolean))).sort(), [rows]);
+
+  const filtered = useMemo(() => {
+    let list = rows;
+    if (search) {
+      const s = search.toLowerCase();
+      list = list.filter((r) => [
+        r.requestNo, r.voucherNo, r.requestor, r.payee, r.purpose, r.description,
+        r.department, r.company, r.branchCode, r.expenseCategory, r.category,
+      ].filter(Boolean).join(" ").toLowerCase().includes(s));
+    }
+    if (dateFrom) list = list.filter((r) => (r.date || r.dateRequested || "") >= dateFrom);
+    if (dateTo) list = list.filter((r) => (r.date || r.dateRequested || "") <= dateTo);
+    if (branchFilter !== "All") list = list.filter((r) => r.branchCode === branchFilter);
+    if (companyFilter !== "All") list = list.filter((r) => r.company === companyFilter);
+    if (deptFilter !== "All") list = list.filter((r) => r.department === deptFilter);
+    if (statusFilter !== "All") list = list.filter((r) => (r.liqStatus || r.status) === statusFilter);
+    if (sortKey) {
+      list = [...list].sort((a, b) => {
+        const av = a[sortKey], bv = b[sortKey];
+        const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av || "").localeCompare(String(bv || ""));
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+    }
+    return list;
+  }, [rows, search, dateFrom, dateTo, branchFilter, companyFilter, deptFilter, statusFilter, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / DRILL_PAGE_SIZE));
+  const pageRows = filtered.slice((page - 1) * DRILL_PAGE_SIZE, page * DRILL_PAGE_SIZE);
+  const totalAmount = useMemo(() => filtered.reduce((s, r) => s + (Number(r.amount ?? r.amountRequested) || 0), 0), [filtered]);
+
+  const toggleSort = (key, sortable) => {
+    if (sortable === false) return;
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  };
+
+  const exportExcel = () => {
+    const data = filtered.map((r) => {
+      const out = {};
+      drill.columns.forEach((c) => { out[c.label] = c.exportValue ? c.exportValue(r) : (r[c.key] ?? ""); });
+      return out;
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, drill.chartLabel.slice(0, 30));
+    downloadWorkbook(wb, `${drill.chartLabel.replace(/[^\w]+/g, "_")}_${drill.valueLabel.replace(/[^\w]+/g, "_")}_${todayISO()}.xlsx`);
+  };
+
+  return (
+    <div className="pcp-modal-backdrop pcp-drill-backdrop" onClick={onClose}>
+      <div className="pcp-modal pcp-drill-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="pcp-drill-head">
+          <div className="pcp-breadcrumb">
+            <span>Dashboard</span><ChevronRight size={12} />
+            <span>{drill.chartLabel}</span><ChevronRight size={12} />
+            <span className="pcp-crumb-current">{drill.valueLabel}</span>
+            {detailRow && (<><ChevronRight size={12} /><span className="pcp-crumb-current">Transaction Details</span></>)}
+          </div>
+          <div className="pcp-drill-title-row">
+            <h3>{drill.chartLabel} — {drill.valueLabel}</h3>
+            <button className="pcp-btn pcp-btn-sm" onClick={onClose}><X size={13} /> Back to Dashboard</button>
+          </div>
+        </div>
+
+        <div className="pcp-drill-toolbar">
+          <div style={{ position: "relative" }}>
+            <Search size={14} style={{ position: "absolute", left: 9, top: 9, color: "#9098b3" }} />
+            <input className="pcp-input" style={{ paddingLeft: 28, width: 200 }} placeholder="Search…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
+          </div>
+          <input type="date" className="pcp-input" style={{ width: 140 }} value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} title="Date from" />
+          <span style={{ color: "var(--text-mut)", fontSize: 12 }}>to</span>
+          <input type="date" className="pcp-input" style={{ width: 140 }} value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} title="Date to" />
+          {branchOptions.length > 1 && (
+            <select className="pcp-select" style={{ width: 130 }} value={branchFilter} onChange={(e) => { setBranchFilter(e.target.value); setPage(1); }}>
+              <option value="All">All Branches</option>
+              {branchOptions.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          )}
+          {companyOptions.length > 1 && (
+            <select className="pcp-select" style={{ width: 150 }} value={companyFilter} onChange={(e) => { setCompanyFilter(e.target.value); setPage(1); }}>
+              <option value="All">All Companies</option>
+              {companyOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          )}
+          {deptOptions.length > 1 && (
+            <select className="pcp-select" style={{ width: 150 }} value={deptFilter} onChange={(e) => { setDeptFilter(e.target.value); setPage(1); }}>
+              <option value="All">All Departments</option>
+              {deptOptions.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
+          {statusOptions.length > 1 && (
+            <select className="pcp-select" style={{ width: 150 }} value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}>
+              <option value="All">All Statuses</option>
+              {statusOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button className="pcp-btn pcp-btn-sm" onClick={() => window.print()} title="Print / Export as PDF via your browser's print dialog"><Printer size={13} /> Print / PDF</button>
+            <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={exportExcel}><Download size={13} /> Export to Excel</button>
+          </div>
+        </div>
+
+        <div className="pcp-drill-body">
+          <div className="pcp-drill-table-wrap">
+            <table className="pcp-table">
+              <thead>
+                <tr>
+                  {drill.columns.map((c) => (
+                    <th
+                      key={c.key}
+                      style={{ cursor: c.sortable === false ? "default" : "pointer", userSelect: "none", textAlign: c.align === "right" ? "right" : "left" }}
+                      onClick={() => toggleSort(c.key, c.sortable)}
+                    >
+                      {c.label}{sortKey === c.key ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+                    </th>
+                  ))}
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.length ? pageRows.map((r) => (
+                  <React.Fragment key={r.id}>
+                    <tr className="pcp-row-click" onClick={() => setDetailRow(detailRow && detailRow.id === r.id ? null : r)}>
+                      {drill.columns.map((c) => (
+                        <td key={c.key} style={{ textAlign: c.align === "right" ? "right" : "left" }} className={c.align === "right" ? "pcp-num" : undefined}>
+                          {c.render ? c.render(r) : (r[c.key] ?? "—")}
+                        </td>
+                      ))}
+                      <td>
+                        <button className="pcp-btn pcp-btn-sm" onClick={(e) => { e.stopPropagation(); setDetailRow(detailRow && detailRow.id === r.id ? null : r); }}>
+                          View Details
+                        </button>
+                      </td>
+                    </tr>
+                    {detailRow && detailRow.id === r.id && (
+                      <tr>
+                        <td colSpan={drill.columns.length + 1} style={{ padding: 0 }}>
+                          <TransactionDetailDrawer row={r} onNavigate={onNavigate} onClose={() => setDetailRow(null)} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                )) : <tr><td colSpan={drill.columns.length + 1} className="pcp-empty">No transactions match your filters</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="pcp-drill-foot">
+          <div className="pcp-drill-count">
+            {filtered.length} transaction(s) · Total {peso(totalAmount)}
+          </div>
+          <div className="pcp-pagination">
+            <button className="pcp-btn pcp-btn-sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Prev</button>
+            <span>Page {page} of {totalPages}</span>
+            <button className="pcp-btn pcp-btn-sm" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Inline "Transaction Details" panel shown beneath a clicked drill-down row —
+   full field list, attached receipts/documents, and an Edit shortcut into
+   the relevant working tab (Disbursements / Liquidation). */
+function TransactionDetailDrawer({ row, onNavigate, onClose }) {
+  const fields = [
+    ["Request No.", row.requestNo], ["Voucher No.", row.voucherNo],
+    ["Date", row.date ? fmtDate(row.date) : null], ["Date Requested", row.dateRequested ? fmtDate(row.dateRequested) : null],
+    ["Liquidation Date", row.liquidationDate ? fmtDate(row.liquidationDate) : null],
+    ["Company", row.company], ["Branch", row.branchCode], ["Department", row.department],
+    ["Requestor", row.requestor], ["Payee", row.payee], ["Purpose / Description", row.purpose || row.description],
+    ["Expense Category", row.expenseCategory || row.category],
+    ["Amount Requested", row.amountRequested !== undefined ? peso(row.amountRequested) : (row.amount !== undefined ? peso(row.amount) : null)],
+    ["Amount Liquidated", row.amountLiquidated !== undefined ? peso(row.amountLiquidated) : null],
+    ["Remaining Balance", row.remainingBalance !== undefined ? peso(row.remainingBalance) : null],
+    ["Status", row.status], ["Liquidation Status", row.liqStatus],
+    ["Liquidation Reference", row.liquidationRef],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== "");
+
+  return (
+    <div className="pcp-detail-drawer">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div className="pcp-section-title" style={{ margin: 0 }}>Transaction Details</div>
+        <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={onClose}><X size={13} /></button>
+      </div>
+      <div className="pcp-detail-grid">
+        {fields.map(([label, value]) => (
+          <div key={label}>
+            <div className="pcp-detail-field-label">{label}</div>
+            <div className="pcp-detail-field-value">{value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="pcp-detail-field-label" style={{ marginBottom: 6 }}>Attached Receipts / Documents</div>
+      {row.attachments && row.attachments.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+          {row.attachments.map((a) => (
+            <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--line)", borderRadius: 8, padding: "7px 10px", background: "#fff" }}>
+              <FileText size={14} color="#2054a3" style={{ flexShrink: 0 }} />
+              <div style={{ minWidth: 0, flex: 1, fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+              <a className="pcp-btn pcp-btn-sm" href={a.data} target="_blank" rel="noopener noreferrer">View</a>
+            </div>
+          ))}
+        </div>
+      ) : <div style={{ fontSize: 12, color: "var(--text-mut)", marginBottom: 12 }}>No documents attached.</div>}
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <button className="pcp-btn pcp-btn-sm" onClick={() => onNavigate && onNavigate("disbursements")}><Edit3 size={12} /> Edit in Disbursements</button>
+        <button className="pcp-btn pcp-btn-sm" onClick={() => onNavigate && onNavigate("liquidation")}><FileSpreadsheet size={12} /> Open Liquidation</button>
+      </div>
     </div>
   );
 }
@@ -2101,8 +2732,6 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
 
   return (
     <div>
-      {/* Beginning Balance always renders first, sourced from the fund master
-          config — independent of whether any transactions exist yet. */}
       <div className="pcp-flow">
         <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
           <div className="pcp-flow-label">Beginning Balance</div>
@@ -2119,13 +2748,8 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
           <div className="pcp-flow-value pcp-num">{peso(m.totalLiquidated)}</div>
           <ChevronRight className="pcp-flow-arrow" size={18} />
         </div>
-        <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("requests")}>
-          <div className="pcp-flow-label">Scheduled/Future</div>
-          <div className="pcp-flow-value pcp-num">{peso(m.scheduledFutureTotal)}</div>
-          <ChevronRight className="pcp-flow-arrow" size={18} />
-        </div>
         <div className="pcp-flow-step pcp-flow-click" onClick={() => onNavigate && onNavigate("masterdata")}>
-          <div className="pcp-flow-label">Current Available Balance</div>
+          <div className="pcp-flow-label">Available Balance</div>
           <div className="pcp-flow-value pcp-num" style={{ color: m.availableBalance < 0 ? "#ff8080" : "#8fffb0" }}>
             {peso(m.availableBalance)}
           </div>
@@ -2133,46 +2757,43 @@ function BranchDashboard({ label, branchCode, funds, requests, disbursements, li
       </div>
 
       {(fundsForBranch.length > 0 || custodians) && (
-        <div className="pcp-eyebrow" style={{ marginBottom: 10 }}>
-          {branchCode} · {companyOfBranch(branchCode)}{custodians ? ` · Custodian: ${custodians}` : ""}
+        <div className="pcp-branch-info">
+          <div className="pcp-branch-info-item">
+            <div className="pcp-branch-info-icon"><Building2 size={16} /></div>
+            <div>
+              <div className="pcp-branch-info-label">Company</div>
+              <div className="pcp-branch-info-value">{companyOfBranch(branchCode)}</div>
+            </div>
+          </div>
+          <div className="pcp-branch-info-item">
+            <div className="pcp-branch-info-icon"><UserCog size={16} /></div>
+            <div>
+              <div className="pcp-branch-info-label">Custodian</div>
+              <div className="pcp-branch-info-value">{custodians || "—"}</div>
+            </div>
+          </div>
+          <div className="pcp-branch-info-item">
+            <div className="pcp-branch-info-icon"><Landmark size={16} /></div>
+            <div>
+              <div className="pcp-branch-info-label">Plant / Branch Code</div>
+              <div className="pcp-branch-info-value">{branchCode}</div>
+            </div>
+          </div>
         </div>
       )}
 
       <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" foot="From fund master configuration" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Beginning Balance" value={peso(m.totalFund)} icon={Banknote} tint="#2054a3" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
         <KpiCard label="Total Disbursed" value={peso(m.totalDisbursed)} icon={ArrowUpRight} tint="#b9790a" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
         <KpiCard label="Total Liquidated" value={peso(m.totalLiquidated)} icon={ArrowDownRight} tint="#15803d" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
-        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
-        <KpiCard label="Scheduled/Future Transactions" value={m.scheduledFutureCount + " · " + peso(m.scheduledFutureTotal)} icon={Clock} tint="#7c3aed" foot="Approved, dated after today" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
-        <KpiCard label="Current Available Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
+        <KpiCard label="Available Balance" value={peso(m.availableBalance)} icon={CircleDollarSign}
           tint={m.availableBalance < 0 ? "#c8102e" : "#15803d"}
-          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand today"}
+          foot={m.availableBalance < 0 ? "Over committed — replenish soon" : "Cash on hand"}
           onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
-        <KpiCard label="Projected Available Balance" value={peso(m.projectedAvailableBalance)} icon={TrendingUp}
-          tint={m.projectedAvailableBalance < 0 ? "#c8102e" : "#2054a3"}
-          foot="Current − Scheduled/Future"
-          onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
+        <KpiCard label="Completed & Billed" value={m.completedBilled} icon={Check} tint="#15803d" foot="Exported to Acumatica" onClick={onNavigate ? () => onNavigate("disbursements") : undefined} />
+        <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
+        <KpiCard label="Pending Liquidation" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
         <KpiCard label="Employees w/ Active Advances" value={m.activeEmployeeCount} icon={Users} tint="#7c3aed" onClick={onNavigate ? () => onNavigate("history") : undefined} />
-      </div>
-
-      <div className="pcp-card pcp-card-pad" style={{ marginTop: 16 }}>
-        <div className="pcp-section-title">Scheduled / Future Transactions — {label}</div>
-        <div className="pcp-table-wrap">
-          <table className="pcp-table">
-            <thead><tr><th>Request No.</th><th>Request Date</th><th>Scheduled Date</th><th>Amount</th><th>Status</th></tr></thead>
-            <tbody>
-              {m.futureTransactions.length ? m.futureTransactions.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.requestNo}</td>
-                  <td>{fmtDate(r.date)}</td>
-                  <td>{fmtDate(r.scheduledDate || r.date)}</td>
-                  <td className="pcp-num">{peso(r.amount)}</td>
-                  <td><Badge status={r.status} /></td>
-                </tr>
-              )) : <tr><td colSpan={5} className="pcp-empty">No scheduled or future transactions for {label}</td></tr>}
-            </tbody>
-          </table>
-        </div>
       </div>
 
       <div className="pcp-card pcp-card-pad" style={{ marginTop: 16 }}>
@@ -2207,12 +2828,10 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
           date: request.date, employee: request.employee, department: request.department,
           branchCode: request.branchCode, purpose: request.purpose,
           amount: request.amount, approver: request.approver || "",
-          scheduledDate: request.scheduledDate || request.date,
         }
       : {
           date: todayISO(), employee: "", department: SUBACCOUNTS[1].code,
           branchCode: defaultBranch, purpose: "", amount: "", approver: "",
-          scheduledDate: todayISO(),
         }
   );
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -2272,18 +2891,9 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
             <label>Purpose</label>
             <textarea className="pcp-input" rows={2} placeholder="What is this cash advance for?" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} />
           </div>
-          <div className="pcp-field-row">
-            <div className="pcp-field">
-              <label>Amount Requested (₱)</label>
-              <input type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
-            </div>
-            <div className="pcp-field">
-              <label>Scheduled / Release Date</label>
-              <input type="date" className="pcp-input" value={form.scheduledDate} onChange={(e) => set("scheduledDate", e.target.value)} />
-            </div>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--text-mut)", marginTop: -6 }}>
-            Leave as today for an immediate request, or pick a future date to schedule it — it will appear under Future Transactions and won't reduce the current available balance until that date.
+          <div className="pcp-field">
+            <label>Amount Requested (₱)</label>
+            <input type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
           </div>
         </div>
         <div className="pcp-modal-foot">
@@ -2339,7 +2949,7 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
             <table className="pcp-table">
               <thead>
                 <tr>
-                  <th>Request No.</th><th>Date</th><th>Scheduled Date</th><th>Employee</th><th>Department</th><th>Plant</th>
+                  <th>Request No.</th><th>Date</th><th>Employee</th><th>Department</th><th>Plant</th>
                   <th>Purpose</th><th>Amount</th><th>Approver</th><th>Status</th><th></th>
                 </tr>
               </thead>
@@ -2348,7 +2958,6 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
                   <tr key={r.id}>
                     <td>{r.requestNo}</td>
                     <td>{fmtDate(r.date)}</td>
-                    <td>{fmtDate(r.scheduledDate || r.date)}</td>
                     <td>{r.employee}</td>
                     <td title={subaccountLabel(r.department)}>{subaccountLabel(r.department)}</td>
                     <td>{plantLabel(r.branchCode)}</td>
@@ -2373,7 +2982,7 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
                       </div>
                     </td>
                   </tr>
-                )) : <tr><td colSpan={11} className="pcp-empty">No requests match your filters</td></tr>}
+                )) : <tr><td colSpan={10} className="pcp-empty">No requests match your filters</td></tr>}
               </tbody>
             </table>
           </div>
@@ -2923,23 +3532,10 @@ function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExpo
 }
 /* ============================= MASTER DATA ============================= */
 
-function FundFormModal({ onClose, onSave, fund, funds }) {
-  const [form, setForm] = useState(fund || { branchCode: BRANCHES[0].code, label: "", custodian: "", beginningBalance: "", status: "Active" });
+function FundFormModal({ onClose, onSave, fund }) {
+  const [form, setForm] = useState(fund || { branchCode: BRANCHES[0].code, label: "", custodian: "", beginningBalance: "" });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-
-  const allFunds = funds || [];
-  const branchRequired = !form.branchCode;
-  const negativeBalance = form.beginningBalance !== "" && Number(form.beginningBalance) < 0;
-  /* Prevent duplicate Fund Master records: one active fund per branch, and no
-     two funds sharing the same Plant name on the same branch. */
-  const duplicateBranch = allFunds.some((f) => f.branchCode === form.branchCode && f.id !== (fund && fund.id));
-  const duplicateName = allFunds.some((f) =>
-    f.branchCode === form.branchCode && f.id !== (fund && fund.id) &&
-    f.label.trim().toLowerCase() === form.label.trim().toLowerCase()
-  );
-
-  const valid = form.label.trim() && form.custodian.trim() && !branchRequired && !negativeBalance
-    && form.beginningBalance !== "" && !duplicateBranch && !duplicateName;
+  const valid = form.label.trim() && form.custodian.trim() && Number(form.beginningBalance) >= 0;
 
   return (
     <div className="pcp-modal-backdrop" onClick={onClose}>
@@ -2954,7 +3550,7 @@ function FundFormModal({ onClose, onSave, fund, funds }) {
             <input className="pcp-input" placeholder="e.g. Manila" value={form.label} onChange={(e) => set("label", e.target.value)} />
           </div>
           <div className="pcp-field">
-            <label>Branch (ERP Code) *</label>
+            <label>Branch (ERP Code)</label>
             <select className="pcp-select" value={form.branchCode} onChange={(e) => set("branchCode", e.target.value)}>
               {COMPANIES.map((c) => (
                 <optgroup label={c} key={c}>
@@ -2962,8 +3558,6 @@ function FundFormModal({ onClose, onSave, fund, funds }) {
                 </optgroup>
               ))}
             </select>
-            {duplicateBranch && <div className="pcp-login-err" style={{ marginTop: 6 }}>A fund already exists for this branch. Each branch can only have one Fund Master record.</div>}
-            {!duplicateBranch && duplicateName && <div className="pcp-login-err" style={{ marginTop: 6 }}>This plant name is already used on this branch.</div>}
           </div>
           <div className="pcp-field-row">
             <div className="pcp-field">
@@ -2971,22 +3565,14 @@ function FundFormModal({ onClose, onSave, fund, funds }) {
               <input className="pcp-input" placeholder="Full name" value={form.custodian} onChange={(e) => set("custodian", e.target.value)} />
             </div>
             <div className="pcp-field">
-              <label>Status</label>
-              <select className="pcp-select" value={form.status || "Active"} onChange={(e) => set("status", e.target.value)}>
-                <option value="Active">Active</option>
-                <option value="Inactive">Inactive</option>
-              </select>
+              <label>Beginning Balance (₱)</label>
+              <input type="number" min="0" step="0.01" className="pcp-input" value={form.beginningBalance} onChange={(e) => set("beginningBalance", e.target.value)} />
             </div>
-          </div>
-          <div className="pcp-field">
-            <label>Beginning Balance (₱)</label>
-            <input type="number" min="0" step="0.01" className="pcp-input" value={form.beginningBalance} onChange={(e) => set("beginningBalance", e.target.value)} />
-            {negativeBalance && <div className="pcp-login-err" style={{ marginTop: 6 }}>Beginning Balance cannot be negative.</div>}
           </div>
         </div>
         <div className="pcp-modal-foot">
           <button className="pcp-btn" onClick={onClose}>Cancel</button>
-          <button className="pcp-btn pcp-btn-primary" disabled={!valid} onClick={() => onSave({ ...form, beginningBalance: Number(form.beginningBalance), status: form.status || "Active" })}>Save Fund</button>
+          <button className="pcp-btn pcp-btn-primary" disabled={!valid} onClick={() => onSave({ ...form, beginningBalance: Number(form.beginningBalance) })}>Save Fund</button>
         </div>
       </div>
     </div>
@@ -3024,7 +3610,7 @@ function ReferenceTable({ title, columns, rows }) {
   );
 }
 
-function MasterDataTab({ funds, disbursements, liquidations, replenishments, onAddFund, onEditFund, onDeleteFund, isAdmin }) {
+function MasterDataTab({ funds, disbursements, liquidations, replenishments, onAddFund, onEditFund, onDeleteFund }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
 
@@ -3033,17 +3619,16 @@ function MasterDataTab({ funds, disbursements, liquidations, replenishments, onA
       <TopBar
         title="Funds & Master Data"
         sub="Manage petty cash funds and view reference data used across the system"
-        right={isAdmin ? <button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Fund</button> : null}
+        right={<button className="pcp-btn pcp-btn-primary" onClick={() => setShowForm(true)}><Plus size={14} /> New Fund</button>}
       />
       <div className="pcp-content">
         <div className="pcp-card" style={{ marginBottom: 18 }}>
-          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>Petty Cash Funds (Plants)</div>
-            {!isAdmin && <div style={{ fontSize: 11.5, color: "var(--text-mut)" }}>View only — Beginning Balance and fund records are editable by administrators only</div>}
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", fontWeight: 700, fontSize: 13 }}>
+            Petty Cash Funds (Plants)
           </div>
           <div className="pcp-table-wrap">
             <table className="pcp-table">
-              <thead><tr><th>Plant</th><th>Branch</th><th>Company</th><th>Custodian</th><th>Beginning Balance</th><th>Available Balance</th><th>Status</th><th>Last Updated</th><th>Last Updated By</th>{isAdmin && <th></th>}</tr></thead>
+              <thead><tr><th>Plant</th><th>Branch</th><th>Company</th><th>Custodian</th><th>Beginning Balance</th><th>Available Balance</th><th></th></tr></thead>
               <tbody>
                 {funds.map((f) => {
                   const mon = monitoringForFund(f, disbursements, liquidations, replenishments);
@@ -3055,17 +3640,12 @@ function MasterDataTab({ funds, disbursements, liquidations, replenishments, onA
                     <td>{f.custodian}</td>
                     <td className="pcp-num">{peso(f.beginningBalance)}</td>
                     <td className="pcp-num" style={{ fontWeight: 700, color: mon.available < 0 ? "var(--brand)" : "var(--green)" }}>{peso(mon.available)}</td>
-                    <td><Badge status={f.status || "Active"} /></td>
-                    <td>{f.lastUpdated ? fmtDate(f.lastUpdated) : "—"}</td>
-                    <td style={{ fontSize: 11.5, color: "var(--text-mut)" }}>{f.lastUpdatedBy || "—"}</td>
-                    {isAdmin && (
-                      <td>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button className="pcp-btn pcp-btn-sm" onClick={() => setEditing(f)} title="Edit fund"><Edit3 size={12} /></button>
-                          <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => onDeleteFund(f.id)} title="Delete fund"><Trash2 size={12} /></button>
-                        </div>
-                      </td>
-                    )}
+                    <td>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="pcp-btn pcp-btn-sm" onClick={() => setEditing(f)} title="Edit fund"><Edit3 size={12} /></button>
+                        <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => onDeleteFund(f.id)} title="Delete fund"><Trash2 size={12} /></button>
+                      </div>
+                    </td>
                   </tr>
                   );
                 })}
@@ -3096,11 +3676,11 @@ function MasterDataTab({ funds, disbursements, liquidations, replenishments, onA
           rows={TAX_CATEGORIES}
         />
       </div>
-      {isAdmin && showForm && (
-        <FundFormModal funds={funds} onClose={() => setShowForm(false)} onSave={(f) => { onAddFund(f); setShowForm(false); }} />
+      {showForm && (
+        <FundFormModal onClose={() => setShowForm(false)} onSave={(f) => { onAddFund(f); setShowForm(false); }} />
       )}
-      {isAdmin && editing && (
-        <FundFormModal funds={funds} fund={editing} onClose={() => setEditing(null)} onSave={(f) => { onEditFund(editing.id, f); setEditing(null); }} />
+      {editing && (
+        <FundFormModal fund={editing} onClose={() => setEditing(null)} onSave={(f) => { onEditFund(editing.id, f); setEditing(null); }} />
       )}
     </div>
   );
@@ -3138,7 +3718,24 @@ function EditBalancesModal({ funds, onClose, onSave }) {
 
 /* Report for top management: PCF monitoring per fund + every transaction.
    Printable, and exportable to a multi-sheet Excel workbook. */
-function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments, plantTitle }) {
+function ManagementReportTab({ funds, requests, disbursements, liquidations, replenishments, plantTitle, generatedBy }) {
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [watermark, setWatermark] = useState(false);
+
+  const reportRefNo = useMemo(
+    () => "RPT-" + todayISO().replace(/-/g, "") + "-" + Math.random().toString(36).slice(2, 7).toUpperCase(),
+    []
+  );
+  const printedAt = useMemo(() => new Date().toLocaleString("en-PH"), []);
+
+  const inRange = useCallback((d) => {
+    if (!d) return true;
+    if (dateFrom && d < dateFrom) return false;
+    if (dateTo && d > dateTo) return false;
+    return true;
+  }, [dateFrom, dateTo]);
+
   const m = useMemo(() => computeMetrics(funds, requests, disbursements, liquidations, replenishments), [funds, requests, disbursements, liquidations, replenishments]);
 
   const monitoring = useMemo(
@@ -3152,8 +3749,8 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
   }), { beginning: 0, disbursed: 0, liquidated: 0, outstanding: 0, replenished: 0, available: 0 }), [monitoring]);
 
   const disbRows = useMemo(
-    () => [...disbursements].sort((a, b) => (b.date || "").localeCompare(a.date || "")),
-    [disbursements]
+    () => [...disbursements].filter((d) => inRange(d.date)).sort((a, b) => (b.date || "").localeCompare(a.date || "")),
+    [disbursements, inRange]
   );
   const liqRows = useMemo(() => {
     const out = [];
@@ -3161,6 +3758,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
       const liq = liquidationFor(d.id, liquidations);
       if (!liq || !liq.lines) return;
       liq.lines.forEach((l) => {
+        if (!inRange(l.date)) return;
         const expenseDesc = (l.expense && l.expense.trim()) ? l.expense.trim() : l.category;
         out.push({
           voucherNo: d.voucherNo, branchCode: d.branchCode, date: l.date, employee: d.employee,
@@ -3171,7 +3769,18 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
       });
     });
     return out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  }, [disbursements, liquidations]);
+  }, [disbursements, liquidations, inRange]);
+  const liqTotal = useMemo(() => liqRows.reduce((s, l) => s + (Number(l.amount) || 0), 0), [liqRows]);
+
+  /* Single-plant context (used when the Reports tab is scoped to one fund) so
+     the letterhead can show a specific Company / Custodian instead of "All". */
+  const soleFund = funds.length === 1 ? funds[0] : null;
+  const reportCompany = soleFund ? companyOfBranch(soleFund.branchCode) : "All Companies";
+  const reportCustodian = soleFund ? soleFund.custodian : (funds.length ? "Multiple Custodians" : "—");
+  const reportBranch = soleFund ? soleFund.branchCode : (plantTitle || "All Plants");
+  const reportPeriod = (dateFrom || dateTo)
+    ? `${dateFrom ? fmtDate(dateFrom) : "Start"} – ${dateTo ? fmtDate(dateTo) : "Present"}`
+    : "All Dates";
 
   const exportReport = useCallback(() => {
     const wb = XLSX.utils.book_new();
@@ -3203,13 +3812,13 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lRows.length ? lRows : [{}]), "Liquidation Details");
 
-    const rRows = requests.map((r) => ({
-      "Request No.": r.requestNo, "Date": r.date, "Scheduled Date": r.scheduledDate || r.date, "Employee": r.employee, "Branch": r.branchCode,
+    const rRows = requests.filter((r) => inRange(r.date)).map((r) => ({
+      "Request No.": r.requestNo, "Date": r.date, "Employee": r.employee, "Branch": r.branchCode,
       "Department": deptDesc(r.department), "Purpose": r.purpose, "Amount": r.amount, "Approver": r.approver || "", "Status": r.status,
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rRows.length ? rRows : [{}]), "Requests");
 
-    const repRows = (replenishments || []).map((r) => ({
+    const repRows = (replenishments || []).filter((r) => inRange(r.date)).map((r) => ({
       "Replenishment No.": r.replenishmentNo, "Date": r.date, "Branch": r.branchCode,
       "Company": companyOfBranch(r.branchCode), "Amount": r.amount, "Prepared By": r.preparedBy,
       "Status": r.status || "", "Remarks": r.remarks || "",
@@ -3217,7 +3826,7 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(repRows.length ? repRows : [{}]), "Replenishments");
 
     downloadWorkbook(wb, `PCF_Management_Report_${todayISO()}.xlsx`);
-  }, [monitoring, totals, disbRows, liqRows, requests, liquidations, replenishments]);
+  }, [monitoring, totals, disbRows, liqRows, requests, liquidations, replenishments, inRange]);
 
   return (
     <div>
@@ -3232,13 +3841,44 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
         }
       />
       <div className="pcp-content">
+        <div className="pcp-card pcp-card-pad pcp-no-print" style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 14, alignItems: "flex-end" }}>
+          <div className="pcp-field" style={{ marginBottom: 0 }}>
+            <label>Report Period — From</label>
+            <input type="date" className="pcp-input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          </div>
+          <div className="pcp-field" style={{ marginBottom: 0 }}>
+            <label>Report Period — To</label>
+            <input type="date" className="pcp-input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          </div>
+          {(dateFrom || dateTo) && (
+            <button className="pcp-btn pcp-btn-sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear</button>
+          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, marginLeft: "auto", cursor: "pointer" }}>
+            <input type="checkbox" checked={watermark} onChange={(e) => setWatermark(e.target.checked)} />
+            Mark as CONFIDENTIAL
+          </label>
+        </div>
+
+        {watermark && <div className="pcp-report-watermark">CONFIDENTIAL</div>}
+
         <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16 }}>
-          <div className="pcp-report-head">
-            <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
-            <img src={LOGO_SPI} alt="Starkson Paper and Plastic Corporation" />
-            <div style={{ marginLeft: "auto", textAlign: "right" }}>
-              <div className="pcp-report-title">Petty Cash Fund — Management Report</div>
-              <div className="pcp-report-sub">Generated {fmtDate(todayISO())} · A1+ Paper &amp; Plastic Inc. · Starkson Paper &amp; Plastic Corp.</div>
+          <div className="pcp-report-letterhead">
+            <div className="pcp-report-refno">Report Ref. No.<br />{reportRefNo}</div>
+            <div className="pcp-report-letterhead-logos">
+              <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
+              <img src={LOGO_SPI} alt="Starkson Paper and Plastic Corporation" />
+            </div>
+            <div className="pcp-report-company-name">{reportCompany}</div>
+            <div className="pcp-report-portal-name">Petty Cash Fund (PCF) Portal</div>
+            <div className="pcp-report-doc-title">Petty Cash Fund — Management Report</div>
+            <div className="pcp-report-meta-grid">
+              <div className="pcp-report-meta-item"><b>Plant:</b> {plantTitle || "All Plants"}</div>
+              <div className="pcp-report-meta-item"><b>Branch:</b> {reportBranch}</div>
+              <div className="pcp-report-meta-item"><b>Company:</b> {reportCompany}</div>
+              <div className="pcp-report-meta-item"><b>Custodian:</b> {reportCustodian}</div>
+              <div className="pcp-report-meta-item"><b>Report Period:</b> {reportPeriod}</div>
+              <div className="pcp-report-meta-item"><b>Generated By:</b> {generatedBy || "—"}</div>
+              <div className="pcp-report-meta-item"><b>Date Generated:</b> {fmtDate(todayISO())}</div>
             </div>
           </div>
         </div>
@@ -3317,12 +3957,24 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
                     <td>{d.billed ? <Check size={13} color="#15803d" /> : <span style={{ color: "#9098b3" }}>—</span>}</td>
                   </tr>
                 )) : <tr><td colSpan={10} className="pcp-empty">No disbursements recorded</td></tr>}
+                {disbRows.length > 0 && (
+                  <tr><td colSpan={10} className="pcp-report-nothing-follows">*** NOTHING FOLLOWS ***</td></tr>
+                )}
               </tbody>
+              {disbRows.length ? (
+                <tfoot>
+                  <tr>
+                    <td colSpan={7}>TOTAL ({disbRows.length} transaction{disbRows.length === 1 ? "" : "s"})</td>
+                    <td className="pcp-num">{peso(disbRows.reduce((s, d) => s + (Number(d.amount) || 0), 0))}</td>
+                    <td colSpan={2}></td>
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
         </div>
 
-        <div className="pcp-card">
+        <div className="pcp-card" style={{ marginBottom: 16 }}>
           <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", fontWeight: 700, fontSize: 13 }}>Liquidation Details ({liqRows.length})</div>
           <div className="pcp-table-wrap">
             <table className="pcp-table">
@@ -3345,14 +3997,500 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
                     <td className="pcp-num">{peso(l.amount)}</td>
                   </tr>
                 )) : <tr><td colSpan={8} className="pcp-empty">No liquidation lines recorded</td></tr>}
+                {liqRows.length > 0 && (
+                  <tr><td colSpan={8} className="pcp-report-nothing-follows">*** NOTHING FOLLOWS ***</td></tr>
+                )}
               </tbody>
+              {liqRows.length ? (
+                <tfoot>
+                  <tr>
+                    <td colSpan={7}>GRAND TOTAL ({liqRows.length} line{liqRows.length === 1 ? "" : "s"})</td>
+                    <td className="pcp-num">{peso(liqTotal)}</td>
+                  </tr>
+                </tfoot>
+              ) : null}
             </table>
           </div>
+        </div>
+
+        <div className="pcp-card pcp-card-pad pcp-report-signature">
+          <div className="pcp-report-sig-line">
+            <div className="pcp-report-sig-name">{reportCustodian !== "—" ? reportCustodian : "\u00A0"}</div>
+            <div className="pcp-report-sig-role">Prepared by — Custodian</div>
+          </div>
+          <div className="pcp-report-sig-line">
+            <div className="pcp-report-sig-name">&nbsp;</div>
+            <div className="pcp-report-sig-role">Reviewed by — Accounting Manager</div>
+          </div>
+          <div className="pcp-report-sig-line">
+            <div className="pcp-report-sig-name">&nbsp;</div>
+            <div className="pcp-report-sig-role">Approved by — Finance Director</div>
+          </div>
+        </div>
+
+        <div className="pcp-print-footer" style={{ textAlign: "center", fontSize: 10, color: "#9098b3", marginTop: 10 }}>
+          Generated from PCF Portal · Ref. {reportRefNo} · Printed on {printedAt}
         </div>
       </div>
     </div>
   );
 }
+/* ============================= LIQUIDATION AGING REPORT (ALL PLANTS) ============================= */
+
+/* Generic horizontal/vertical bar chart for the aging analytics — same shape
+   as MiniBarChart but with a pluggable value formatter so it can show pesos,
+   percentages, or plain counts. */
+function AgingBarChart({ data, formatter, height = 240, color = "#c8102e" }) {
+  if (!data.length) return <div className="pcp-empty">No data yet</div>;
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} layout="vertical" margin={{ left: 8, right: 24, top: 4, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" vertical />
+        <XAxis type="number" tickFormatter={formatter} fontSize={10.5} stroke="#9098b3" />
+        <YAxis type="category" dataKey="name" width={130} fontSize={10.5} stroke="#9098b3" />
+        <Tooltip formatter={(v) => formatter(v)} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }} />
+        <Bar dataKey="value" fill={color} radius={[4, 4, 4, 4]} maxBarSize={20} />
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+/* Monthly liquidated-amount trend across whatever transactions are in scope. */
+function AgingTrendChart({ data, height = 240 }) {
+  if (!data.length) return <div className="pcp-empty">No data yet</div>;
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={data} margin={{ left: 8, right: 18, top: 8, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" />
+        <XAxis dataKey="name" fontSize={10.5} stroke="#9098b3" />
+        <YAxis tickFormatter={shortPeso} fontSize={10.5} stroke="#9098b3" />
+        <Tooltip formatter={(v) => peso(v)} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }} />
+        <Line type="monotone" dataKey="value" stroke="#2054a3" strokeWidth={2.5} dot={{ r: 3 }} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+const AGING_GROUP_OPTIONS = [
+  { key: "all", label: "All Plants (Consolidated)", keyFn: () => "All Plants (Consolidated)" },
+  { key: "plant", label: "Per Plant", keyFn: (r) => r.plantLabel },
+  { key: "company", label: "Per Company", keyFn: (r) => r.company },
+  { key: "branch", label: "Per Branch", keyFn: (r) => r.branchCode },
+  { key: "custodian", label: "Per Custodian", keyFn: (r) => r.custodian },
+];
+
+/* Drill-down panel: every disbursement for one plant with its aging status. */
+function PlantAgingDrilldown({ plant, rows, onClose }) {
+  return (
+    <div className="pcp-modal-backdrop" onClick={onClose}>
+      <div className="pcp-modal" style={{ maxWidth: 920 }} onClick={(e) => e.stopPropagation()}>
+        <div className="pcp-modal-head">
+          <h3>{plant.plantLabel} — Liquidation Aging Detail</h3>
+          <button className="pcp-btn pcp-btn-ghost pcp-btn-sm" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className="pcp-modal-body">
+          <div className="pcp-kpi-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)", marginBottom: 14 }}>
+            <KpiCard label="Released" value={peso(plant.released)} icon={ArrowUpRight} tint="#2054a3" />
+            <KpiCard label="Liquidated" value={peso(plant.liquidated)} icon={Check} tint="#15803d" />
+            <KpiCard label="Outstanding" value={peso(plant.outstanding)} icon={AlertTriangle} tint="#c8102e" />
+            <KpiCard label="Compliance" value={plant.complianceRate + "%"} icon={ShieldCheck} tint="#b9790a" />
+          </div>
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead>
+                <tr>
+                  <th>Voucher No.</th><th>Date</th><th>Employee</th><th>Department</th>
+                  <th>Amount</th><th>Liquidated</th><th>Outstanding</th><th>Due Date</th><th>Aging</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length ? rows.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.voucherNo}</td>
+                    <td>{fmtDate(r.date)}</td>
+                    <td>{r.employee}</td>
+                    <td>{deptDesc(r.department)}</td>
+                    <td className="pcp-num">{peso(r.amount)}</td>
+                    <td className="pcp-num">{peso(r.liquidated)}</td>
+                    <td className="pcp-num">{peso(r.outstanding)}</td>
+                    <td>{fmtDate(r.dueDate)}</td>
+                    <td>
+                      <span className={"pcp-badge pcp-badge-" + (r.bucket === "Completed" ? "green" : r.bucket === "Current" ? "blue" : r.bucket === "Due Today" ? "amber" : "red")}>
+                        {r.bucket}
+                      </span>
+                    </td>
+                  </tr>
+                )) : <tr><td colSpan={9} className="pcp-empty">No transactions for this plant in the current filter</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="pcp-modal-foot">
+          <button className="pcp-btn" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Centralized, enterprise-wide Liquidation Aging Report. Consolidates every
+   Petty Cash Request/Release/Liquidation across every company, plant and
+   branch — the "funds" list IS the plant registry maintained in Funds &
+   Master Data, so a newly added plant appears here automatically the moment
+   it exists, with no code change. */
+function LiquidationAgingReportTab({ funds, requests, disbursements, liquidations, replenishments, generatedBy }) {
+  const [company, setCompany] = useState("All");
+  const [selectedPlants, setSelectedPlants] = useState([]); // empty = all plants
+  const [branch, setBranch] = useState("All");
+  const [custodian, setCustodian] = useState("All");
+  const [requestor, setRequestor] = useState("");
+  const [department, setDepartment] = useState("All");
+  const [status, setStatus] = useState("All");
+  const [agingBucket, setAgingBucket] = useState("All");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [groupBy, setGroupBy] = useState("all");
+  const [drillPlant, setDrillPlant] = useState(null);
+
+  const custodianOptions = useMemo(() => Array.from(new Set(funds.map((f) => f.custodian))).sort(), [funds]);
+
+  const togglePlant = (code) => setSelectedPlants((sp) => sp.includes(code) ? sp.filter((c) => c !== code) : [...sp, code]);
+
+  const filteredFunds = useMemo(() => funds.filter((f) => {
+    if (company !== "All" && companyOfBranch(f.branchCode) !== company) return false;
+    if (selectedPlants.length && !selectedPlants.includes(f.branchCode)) return false;
+    if (branch !== "All" && f.branchCode !== branch) return false;
+    if (custodian !== "All" && f.custodian !== custodian) return false;
+    return true;
+  }), [funds, company, selectedPlants, branch, custodian]);
+
+  const allRows = useMemo(() => buildAgingRows(filteredFunds, disbursements, liquidations), [filteredFunds, disbursements, liquidations]);
+
+  const filteredRows = useMemo(() => allRows.filter((r) => {
+    if (requestor.trim() && !r.employee.toLowerCase().includes(requestor.trim().toLowerCase())) return false;
+    if (department !== "All" && r.department !== department) return false;
+    if (status !== "All" && r.liqStatus !== status) return false;
+    if (agingBucket !== "All" && r.bucket !== agingBucket) return false;
+    if (dateFrom && (r.date || "") < dateFrom) return false;
+    if (dateTo && (r.date || "") > dateTo) return false;
+    return true;
+  }), [allRows, requestor, department, status, agingBucket, dateFrom, dateTo]);
+
+  const filteredIds = useMemo(() => new Set(filteredRows.map((r) => r.id)), [filteredRows]);
+  const filteredDisbursements = useMemo(() => disbursements.filter((d) => filteredIds.has(d.id)), [disbursements, filteredIds]);
+
+  const plantAging = useMemo(
+    () => aggregatePlantAging(filteredFunds, filteredDisbursements, liquidations, replenishments),
+    [filteredFunds, filteredDisbursements, liquidations, replenishments]
+  );
+
+  const cards = useMemo(() => {
+    const released = plantAging.reduce((s, p) => s + p.released, 0);
+    const outstanding = plantAging.reduce((s, p) => s + p.outstanding, 0);
+    const pending = plantAging.reduce((s, p) => s + p.pending, 0);
+    const dueToday = plantAging.reduce((s, p) => s + p.dueToday, 0);
+    const overdue = plantAging.reduce((s, p) => s + p.overdue, 0);
+    const completed = plantAging.reduce((s, p) => s + p.completed, 0);
+    return { released, outstanding, pending, dueToday, overdue, completed };
+  }, [plantAging]);
+
+  const resetFilters = () => {
+    setCompany("All"); setSelectedPlants([]); setBranch("All"); setCustodian("All");
+    setRequestor(""); setDepartment("All"); setStatus("All"); setAgingBucket("All");
+    setDateFrom(""); setDateTo("");
+  };
+
+  /* ---- Analytics ---- */
+  const overdueByPlant = useMemo(() => plantAging.map((p) => ({ name: p.plantLabel, value: p.overdue })).sort((a, b) => b.value - a.value), [plantAging]);
+  const complianceByPlant = useMemo(() => plantAging.map((p) => ({ name: p.plantLabel, value: p.complianceRate })).sort((a, b) => a.value - b.value), [plantAging]);
+  const outstandingByPlant = useMemo(() => plantAging.map((p) => ({ name: p.plantLabel, value: p.outstanding })).sort((a, b) => b.value - a.value), [plantAging]);
+  const top10PlantsOutstanding = useMemo(() => outstandingByPlant.slice(0, 10), [outstandingByPlant]);
+  const top10EmployeesOverdue = useMemo(() => {
+    const map = new Map();
+    filteredRows.filter((r) => r.isOverdue).forEach((r) => map.set(r.employee, (map.get(r.employee) || 0) + r.outstanding));
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 10);
+  }, [filteredRows]);
+  const monthlyTrend = useMemo(() => {
+    const map = new Map();
+    filteredDisbursements.forEach((d) => {
+      const liq = liquidationFor(d.id, liquidations);
+      if (!liq) return;
+      liq.lines.forEach((l) => {
+        const m = (l.date || "").slice(0, 7);
+        if (!m) return;
+        map.set(m, (map.get(m) || 0) + (Number(l.amount) || 0));
+      });
+    });
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).slice(-12).map(([m, value]) => ({ name: m, value }));
+  }, [filteredDisbursements, liquidations]);
+
+  /* ---- Management report grouping ---- */
+  const groupDef = AGING_GROUP_OPTIONS.find((g) => g.key === groupBy) || AGING_GROUP_OPTIONS[0];
+  const groupedReport = useMemo(() => groupAgingRows(filteredRows, groupDef.keyFn), [filteredRows, groupDef]);
+
+  /* ---- Exports ---- */
+  const exportExcel = useCallback(() => {
+    const wb = XLSX.utils.book_new();
+    const plantRows = plantAging.map((p) => ({
+      "Plant": p.plantLabel, "Branch": p.branchCode, "Company": p.company, "Custodian": p.custodian,
+      "Beginning Balance": p.beginning, "Released": p.released, "Liquidated": p.liquidated, "Outstanding": p.outstanding,
+      "Pending Liquidations": p.pending, "Due Today": p.dueToday, "Overdue": p.overdue, "Completed": p.completed,
+      "Compliance Rate (%)": p.complianceRate,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(plantRows.length ? plantRows : [{}]), "Aging By Plant");
+
+    const groupRows = groupedReport.map((g) => ({
+      [groupDef.label]: g.key, "Transactions": g.count, "Released": g.released,
+      "Liquidated": g.liquidated, "Outstanding": g.outstanding, "Overdue Count": g.overdue,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(groupRows.length ? groupRows : [{}]), "Management Summary");
+
+    const detailRows = filteredRows.map((r) => ({
+      "Plant": r.plantLabel, "Branch": r.branchCode, "Company": r.company, "Custodian": r.custodian,
+      "Voucher No.": r.voucherNo, "Date": r.date, "Employee": r.employee, "Department": deptDesc(r.department),
+      "Amount": r.amount, "Liquidated": r.liquidated, "Outstanding": r.outstanding, "Status": r.liqStatus,
+      "Due Date": r.dueDate, "Days Overdue": r.daysOverdue, "Aging Bucket": r.bucket,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailRows.length ? detailRows : [{}]), "Transaction Detail");
+
+    downloadWorkbook(wb, `Liquidation_Aging_Report_${todayISO()}.xlsx`);
+  }, [plantAging, groupedReport, groupDef, filteredRows]);
+
+  const exportCSV = useCallback(() => {
+    const detailRows = filteredRows.map((r) => ({
+      "Plant": r.plantLabel, "Branch": r.branchCode, "Company": r.company, "Custodian": r.custodian,
+      "Voucher No.": r.voucherNo, "Date": r.date, "Employee": r.employee, "Department": deptDesc(r.department),
+      "Amount": r.amount, "Liquidated": r.liquidated, "Outstanding": r.outstanding, "Status": r.liqStatus,
+      "Due Date": r.dueDate, "Days Overdue": r.daysOverdue, "Aging Bucket": r.bucket,
+    }));
+    const ws = XLSX.utils.json_to_sheet(detailRows.length ? detailRows : [{}]);
+    const csv = XLSX.utils.sheet_to_csv(ws);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `Liquidation_Aging_Report_${todayISO()}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [filteredRows]);
+
+  const printedAt = useMemo(() => new Date().toLocaleString("en-PH"), []);
+  const reportRefNo = useMemo(() => "AGE-" + todayISO().replace(/-/g, "") + "-" + Math.random().toString(36).slice(2, 7).toUpperCase(), []);
+
+  return (
+    <div>
+      <TopBar
+        title="Liquidation Aging Report"
+        sub="Enterprise-wide liquidation aging — every company, plant and branch, consolidated"
+        right={
+          <>
+            <button className="pcp-btn" onClick={() => window.print()}><Printer size={14} /> Print / PDF</button>
+            <button className="pcp-btn" onClick={exportCSV}><Download size={14} /> CSV</button>
+            <button className="pcp-btn pcp-btn-primary" onClick={exportExcel}><FileSpreadsheet size={14} /> Export to Excel</button>
+          </>
+        }
+      />
+      <div className="pcp-content">
+
+        {/* ---- Consolidated Aging Dashboard ---- */}
+        <div className="pcp-kpi-grid pcp-no-print" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
+          <KpiCard label="Total Released Funds" value={shortPeso(cards.released)} icon={ArrowUpRight} tint="#2054a3" />
+          <KpiCard label="Pending Liquidations" value={cards.pending} icon={ClipboardList} tint="#b9790a" />
+          <KpiCard label="Due Today" value={cards.dueToday} icon={Clock} tint="#7c3aed" />
+          <KpiCard label="Overdue Liquidations" value={cards.overdue} icon={AlertTriangle} tint="#c8102e" />
+          <KpiCard label="Completed Liquidations" value={cards.completed} icon={Check} tint="#15803d" />
+          <KpiCard label="Outstanding Amount" value={shortPeso(cards.outstanding)} icon={CircleDollarSign} tint="#c8102e" />
+        </div>
+
+        {/* ---- Filters ---- */}
+        <div className="pcp-card pcp-card-pad pcp-no-print" style={{ marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Filters</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 10 }}>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Company</label>
+              <select className="pcp-select" value={company} onChange={(e) => setCompany(e.target.value)}>
+                {["All", ...COMPANIES].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Branch</label>
+              <select className="pcp-select" value={branch} onChange={(e) => setBranch(e.target.value)}>
+                <option value="All">All</option>
+                {funds.map((f) => <option key={f.branchCode} value={f.branchCode}>{f.branchCode}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Custodian</label>
+              <select className="pcp-select" value={custodian} onChange={(e) => setCustodian(e.target.value)}>
+                <option value="All">All</option>
+                {custodianOptions.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Requestor</label>
+              <input className="pcp-input" placeholder="Employee name" value={requestor} onChange={(e) => setRequestor(e.target.value)} />
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Department</label>
+              <select className="pcp-select" value={department} onChange={(e) => setDepartment(e.target.value)}>
+                <option value="All">All</option>
+                {SUBACCOUNTS.filter((s) => s.desc).map((s) => <option key={s.code} value={s.code}>{s.desc}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Status</label>
+              <select className="pcp-select" value={status} onChange={(e) => setStatus(e.target.value)}>
+                {["All", "Not Liquidated", "Partially Liquidated", "Fully Liquidated", "Over-Liquidated"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Aging Bucket</label>
+              <select className="pcp-select" value={agingBucket} onChange={(e) => setAgingBucket(e.target.value)}>
+                <option value="All">All</option>
+                {AGING_BUCKETS.map((b) => <option key={b}>{b}</option>)}
+              </select>
+            </div>
+            <div className="pcp-field" style={{ margin: 0, display: "flex", gap: 6 }}>
+              <div style={{ flex: 1 }}>
+                <label>From</label>
+                <input type="date" className="pcp-input" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>To</label>
+                <input type="date" className="pcp-input" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+              </div>
+            </div>
+          </div>
+          <div style={{ marginBottom: 4 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-mut)", textTransform: "uppercase", letterSpacing: 0.5 }}>Plants (select one, multiple, or leave blank for all)</label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+              {funds.map((f) => (
+                <button
+                  key={f.branchCode}
+                  className={"pcp-tab" + (selectedPlants.includes(f.branchCode) ? " active" : "")}
+                  onClick={() => togglePlant(f.branchCode)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+            <button className="pcp-btn pcp-btn-sm" onClick={resetFilters}><FilterIcon size={12} /> Reset Filters</button>
+            <div style={{ marginLeft: "auto", fontSize: 12.5, color: "var(--text-mut)" }}>
+              {filteredRows.length} of {allRows.length} transactions across {plantAging.length} plant(s)
+            </div>
+          </div>
+        </div>
+
+        {/* ---- Aging By Plant ---- */}
+        <div className="pcp-card" style={{ marginBottom: 16 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", fontWeight: 700, fontSize: 13 }}>Aging By Plant — click a row to drill down</div>
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead>
+                <tr>
+                  <th>Plant</th><th>Beginning</th><th>Released</th><th>Liquidated</th><th>Outstanding</th>
+                  <th>Pending</th><th>Due Today</th><th>Overdue</th><th>Compliance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plantAging.length ? plantAging.map((p) => (
+                  <tr key={p.branchCode} style={{ cursor: "pointer" }} onClick={() => setDrillPlant(p)}>
+                    <td style={{ fontWeight: 600 }}>{p.plantLabel} <ChevronRight size={12} style={{ verticalAlign: "middle", color: "#9098b3" }} /></td>
+                    <td className="pcp-num">{peso(p.beginning)}</td>
+                    <td className="pcp-num">{peso(p.released)}</td>
+                    <td className="pcp-num">{peso(p.liquidated)}</td>
+                    <td className="pcp-num" style={{ fontWeight: 700, color: p.outstanding > 0 ? "var(--brand)" : "var(--green)" }}>{peso(p.outstanding)}</td>
+                    <td className="pcp-num">{p.pending}</td>
+                    <td className="pcp-num">{p.dueToday}</td>
+                    <td className="pcp-num" style={{ color: p.overdue ? "var(--brand)" : undefined, fontWeight: p.overdue ? 700 : 400 }}>{p.overdue}</td>
+                    <td className="pcp-num">{p.complianceRate}%</td>
+                  </tr>
+                )) : <tr><td colSpan={9} className="pcp-empty">No plants match your filters</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ---- Management Analytics ---- */}
+        <div className="pcp-grid-2" style={{ marginBottom: 16 }}>
+          <div className="pcp-card pcp-card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Overdue Liquidations by Plant</div>
+            <AgingBarChart data={overdueByPlant} formatter={(v) => String(v)} color="#c8102e" />
+          </div>
+          <div className="pcp-card pcp-card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Liquidation Compliance by Plant</div>
+            <AgingBarChart data={complianceByPlant} formatter={(v) => v + "%"} color="#15803d" />
+          </div>
+        </div>
+        <div className="pcp-grid-2" style={{ marginBottom: 16 }}>
+          <div className="pcp-card pcp-card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Outstanding Amount by Plant</div>
+            <AgingBarChart data={outstandingByPlant} formatter={shortPeso} color="#b9790a" />
+          </div>
+          <div className="pcp-card pcp-card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Monthly Liquidation Trend</div>
+            <AgingTrendChart data={monthlyTrend} />
+          </div>
+        </div>
+        <div className="pcp-grid-2" style={{ marginBottom: 16 }}>
+          <div className="pcp-card pcp-card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Top 10 Plants — Highest Outstanding</div>
+            <AgingBarChart data={top10PlantsOutstanding} formatter={shortPeso} color="#c8102e" />
+          </div>
+          <div className="pcp-card pcp-card-pad">
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Top 10 Employees — Overdue Liquidations</div>
+            <AgingBarChart data={top10EmployeesOverdue} formatter={shortPeso} color="#7c3aed" />
+          </div>
+        </div>
+
+        {/* ---- Management Reports ---- */}
+        <div className="pcp-card" style={{ marginBottom: 16 }}>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 700, fontSize: 13 }}>Management Report</div>
+            <select className="pcp-select pcp-no-print" style={{ marginLeft: "auto", maxWidth: 240 }} value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+              {AGING_GROUP_OPTIONS.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
+            </select>
+          </div>
+          <div className="pcp-table-wrap">
+            <table className="pcp-table">
+              <thead>
+                <tr>
+                  <th>{groupDef.label}</th><th>Transactions</th><th>Released</th><th>Liquidated</th><th>Outstanding</th><th>Overdue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {groupedReport.length ? groupedReport.map((g) => (
+                  <tr key={g.key}>
+                    <td style={{ fontWeight: 600 }}>{g.key}</td>
+                    <td className="pcp-num">{g.count}</td>
+                    <td className="pcp-num">{peso(g.released)}</td>
+                    <td className="pcp-num">{peso(g.liquidated)}</td>
+                    <td className="pcp-num">{peso(g.outstanding)}</td>
+                    <td className="pcp-num">{g.overdue}</td>
+                  </tr>
+                )) : <tr><td colSpan={6} className="pcp-empty">No data for the current filters</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="pcp-print-footer" style={{ textAlign: "center", fontSize: 10, color: "#9098b3", marginTop: 10 }}>
+          Generated from PCF Portal · Ref. {reportRefNo} · Prepared by {generatedBy || "—"} · Printed on {printedAt}
+        </div>
+      </div>
+
+      {drillPlant && (
+        <PlantAgingDrilldown
+          plant={drillPlant}
+          rows={filteredRows.filter((r) => r.branchCode === drillPlant.branchCode).sort((a, b) => (b.date || "").localeCompare(a.date || ""))}
+          onClose={() => setDrillPlant(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 /* ============================= REPLENISHMENT ============================= */
 
 const REPLENISH_METHODS = ["Check", "Bank Transfer", "Cash"];
@@ -3883,7 +5021,7 @@ function UserManagementTab({ currentEmail, onChangePassword }) {
                     <td>{u.email}</td>
                     <td>{ROLES[u.role] ? ROLES[u.role].label : (u.role || "Custodian")}</td>
                     <td>{plantsLabel(u.plants)}</td>
-                    <td>{(u.role === "Accounting") ? <Badge status="Approved" /> : <span style={{ color: "var(--text-mut)" }}>—</span>}</td>
+                    <td>{FULL_ACCESS_ROLES.includes(u.role) ? <Badge status="Approved" /> : <span style={{ color: "var(--text-mut)" }}>—</span>}</td>
                   </tr>
                 )) : <tr><td colSpan={5} className="pcp-empty">No users configured. Add them in index.html (window.PCP_USERS) and in your Supabase project.</td></tr>}
               </tbody>
@@ -3999,57 +5137,23 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   useEffect(() => {
     (async () => {
       const saved = await loadState();
-      /* Always keep the four master plant funds available, adding any missing,
-         and backfill master-data fields (status / last-updated) on older records. */
+      /* Always keep the four master plant funds available, adding any missing. */
       const ensureFunds = (fs) => {
         const list = (fs && fs.length) ? fs.map((f) => ({ ...f })) : seedFunds();
-        seedFunds().forEach((sf) => { if (!list.some((f) => f.branchCode === sf.branchCode || f.id === sf.id)) list.push(sf); });
-        return list.map((f) => ({
-          status: "Active", lastUpdated: f.lastUpdated || todayISO(), lastUpdatedBy: f.lastUpdatedBy || "System",
-          ...f,
-        }));
-      };
-      /* One-time migration: the Disney fund moved from the old "D1" sub-branch
-         to the head-office "ST" branch, with its Beginning Balance reset to the
-         newly configured PHP 700,000.00 and its Plant/Fund Name standardized to
-         "DISNEY PLANT". Matched by the fixed fund id so no duplicate Fund
-         Master record is created, and re-run is a no-op once the fund already
-         matches. Also catches the case where the branch/name was already
-         partly updated (e.g. via an in-app edit) but the old PHP 704,035.23
-         balance was never changed. Historical transactions tagged "D1" move
-         with it so they keep showing up in the Disney dashboard's history. */
-      const OLD_DISNEY_BALANCE = 704035.23;
-      const DISNEY_PLANT_NAME = "DISNEY PLANT";
-      const migrateDisneyBranch = (fs, reqs, disbs, reps) => {
-        const funds2 = fs.map((f) => {
-          if (f.id !== "fund-DIS") return f;
-          const needsBranchFix = f.branchCode === "D1";
-          const needsBalanceFix = Math.abs(Number(f.beginningBalance) - OLD_DISNEY_BALANCE) < 0.01;
-          const needsNameFix = f.label === "Disney";
-          if (!needsBranchFix && !needsBalanceFix && !needsNameFix) return f;
-          return {
-            ...f, branchCode: "ST", beginningBalance: 700000, label: DISNEY_PLANT_NAME,
-            lastUpdated: todayISO(), lastUpdatedBy: "System (branch migration)",
-          };
-        });
-        const remap = (arr) => (arr || []).map((r) => (r.branchCode === "D1" ? { ...r, branchCode: "ST" } : r));
-        return { funds2, reqs2: remap(reqs), disbs2: remap(disbs), reps2: remap(reps) };
+        seedFunds().forEach((sf) => { if (!list.some((f) => f.branchCode === sf.branchCode)) list.push(sf); });
+        return list;
       };
       if (saved && saved.dataVersion === DATA_VERSION) {
-        const { funds2, reqs2, disbs2, reps2 } = migrateDisneyBranch(
-          ensureFunds(saved.funds), saved.requests, saved.disbursements, saved.replenishments
-        );
-        setFunds(funds2);
-        setRequests(reqs2);
-        setDisbursements(disbs2);
+        setFunds(ensureFunds(saved.funds));
+        setRequests(saved.requests || []);
+        setDisbursements(saved.disbursements || []);
         setLiquidations(saved.liquidations || []);
-        setReplenishments(reps2);
+        setReplenishments(saved.replenishments || []);
         setAuditLog(saved.auditLog || []);
       } else {
         /* First load after this upgrade — keep master funds but clear ALL
            existing transactions so the system starts with a clean database. */
-        const { funds2 } = migrateDisneyBranch(ensureFunds(saved && saved.funds), [], [], []);
-        setFunds(funds2);
+        setFunds(ensureFunds(saved && saved.funds));
         setRequests([]);
         setDisbursements([]);
         setLiquidations([]);
@@ -4071,7 +5175,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       id: uid("req"), requestNo: form.requestNo, date: form.date, employee: form.employee,
       department: form.department, branchCode: form.branchCode, purpose: form.purpose,
       amount: Number(form.amount), approver: form.approver, status: "Pending",
-      scheduledDate: form.scheduledDate || form.date,
     }]);
     logAudit("Request Created", form.requestNo, `${form.employee} · ${peso(Number(form.amount))} · ${form.purpose}`);
   }, [logAudit]);
@@ -4080,7 +5183,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     setRequests((rs) => rs.map((r) => (r.id === id ? {
       ...r, date: form.date, employee: form.employee, department: form.department,
       branchCode: form.branchCode, purpose: form.purpose, amount: Number(form.amount),
-      approver: form.approver, scheduledDate: form.scheduledDate || form.date,
+      approver: form.approver,
     } : r)));
     const r = requests.find((x) => x.id === id);
     logAudit("Edited", r ? r.requestNo : id, `Request updated · ${form.employee} · ${peso(Number(form.amount))}`);
@@ -4194,24 +5297,19 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
 
   /* ---- Funds ---- */
   const addFund = useCallback((f) => {
-    const stamp = { lastUpdated: todayISO(), lastUpdatedBy: userName || userEmail || "System" };
-    setFunds((fs) => [...fs, { id: uid("fund"), status: "Active", ...f, ...stamp }]);
-    logAudit("Fund Created", f.label, `${f.branchCode} · Beginning Balance ${peso(f.beginningBalance)}`);
-  }, [logAudit, userName, userEmail]);
+    setFunds((fs) => [...fs, { id: uid("fund"), ...f }]);
+  }, []);
   const editFund = useCallback((id, f) => {
-    const stamp = { lastUpdated: todayISO(), lastUpdatedBy: userName || userEmail || "System" };
-    setFunds((fs) => fs.map((x) => (x.id === id ? { ...x, ...f, ...stamp } : x)));
-    logAudit("Fund Updated", f.label, `${f.branchCode} · Beginning Balance ${peso(f.beginningBalance)}`);
-  }, [logAudit, userName, userEmail]);
+    setFunds((fs) => fs.map((x) => (x.id === id ? { ...x, ...f } : x)));
+  }, []);
   const deleteFund = useCallback((id) => {
     setFunds((fs) => fs.filter((x) => x.id !== id));
   }, []);
   /* Bulk beginning-balance update from the Dashboard "Edit Balances" modal. */
   const saveBalances = useCallback((updates) => {
     const map = new Map(updates.map((u) => [u.id, u.beginningBalance]));
-    const stamp = { lastUpdated: todayISO(), lastUpdatedBy: userName || userEmail || "System" };
-    setFunds((fs) => fs.map((x) => (map.has(x.id) ? { ...x, beginningBalance: map.get(x.id), ...stamp } : x)));
-  }, [userName, userEmail]);
+    setFunds((fs) => fs.map((x) => (map.has(x.id) ? { ...x, beginningBalance: map.get(x.id) } : x)));
+  }, []);
 
   /* ---- Plant-scoped views ---- */
   /* Every module only receives data for plants the user is allowed to see, so a
@@ -4420,6 +5518,14 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             key={tab}
             funds={scopedFunds} requests={scopedRequests} disbursements={scopedDisbursements} liquidations={scopedLiquidations} replenishments={scopedReplenishments}
             plantTitle={activePlantLabel}
+            generatedBy={userName || userEmail || "—"}
+          />
+        )}
+        {activeModule === "agingreport" && (
+          <LiquidationAgingReportTab
+            funds={visibleFunds} requests={visibleRequests} disbursements={visibleDisbursements}
+            liquidations={visibleLiquidations} replenishments={visibleReplenishments}
+            generatedBy={userName || userEmail || "—"}
           />
         )}
         {activeModule === "audit" && (
@@ -4428,7 +5534,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         {activeModule === "masterdata" && (
           <MasterDataTab
             funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
-            onAddFund={addFund} onEditFund={editFund} onDeleteFund={deleteFund} isAdmin={isAdmin}
+            onAddFund={addFund} onEditFund={editFund} onDeleteFund={deleteFund}
           />
         )}
         {activeModule === "users" && (
@@ -4630,7 +5736,7 @@ function Root() {
         userName={localSession.name}
         onSignOut={localSignOut}
         userRole={localSession.role}
-        isAdmin={localSession.role === "Accounting"}
+        isAdmin={FULL_ACCESS_ROLES.includes(localSession.role)}
         userPlants={localSession.plants}
       />
     );
