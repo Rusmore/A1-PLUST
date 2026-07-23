@@ -1867,7 +1867,7 @@ function MiniBarChart({ data, height = 220, layout = "vertical" }) {
 const DASHBOARD_BRANCHES = [
   { key: "MNL", label: "Manila", branchCode: "A1+" },
   { key: "WARNER", label: "Warner", branchCode: "WARNER" },
-  { key: "DISNEY", label: "Disney", branchCode: "D1" },
+  { key: "DISNEY", label: "Disney", branchCode: "ST" },
   { key: "RG", label: "RG and Co.", branchCode: "RG" },
 ];
 
