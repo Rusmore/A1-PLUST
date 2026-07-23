@@ -164,8 +164,73 @@
   })();
 </script>
 
-<!-- The portal itself, transpiled in the browser by Babel.
-     Bump the ?v= number whenever you deploy a change so browsers reload it. -->
-<script type="text/babel" data-type="module" data-presets="react" src="PettyCashPortal.jsx?v=20260722b"></script>
+<!-- ============================================================
+     THE PORTAL (modular source)
+     The app source lives in the src/ folder, split into readable files
+     (see src/README.md). There is still NO build step: the loader below
+     fetches every fragment, joins them in order, transpiles the whole thing
+     once with Babel, and runs the result as a single ES module (so the
+     importmap above still resolves react / recharts / xlsx / lucide-react).
+
+     Deploy note: upload the WHOLE src/ folder together with index.html.
+     Cache note: bump PCP_SRC_VERSION whenever you deploy a change so
+     browsers reload the fragments. The order of PCP_SRC_FILES matters and
+     must not be rearranged (later files rely on earlier definitions). -->
+<script>
+  window.PCP_SRC_VERSION = "20260723c";
+  window.PCP_SRC_FILES = [
+    "src/01-imports.jsx",
+    "src/02-helpers.jsx",
+    "src/03-report-engine.jsx",
+    "src/04-acumatica-export.jsx",
+    "src/05-master-data.jsx",
+    "src/06-logos.jsx",
+    "src/07-styles.jsx",
+    "src/08-dashboard.jsx",
+    "src/09-requests.jsx",
+    "src/10-disbursements.jsx",
+    "src/11-liquidation.jsx",
+    "src/12-masterdata-tab.jsx",
+    "src/13-reports-aging.jsx",
+    "src/14-report-center.jsx",
+    "src/15-replenishment.jsx",
+    "src/16-history.jsx",
+    "src/17-audit.jsx",
+    "src/18-account-admin.jsx",
+    "src/19-app.jsx",
+    "src/20-auth-gate.jsx",
+    "src/21-root-mount.jsx"
+  ];
+  (function () {
+    var V = window.PCP_SRC_VERSION;
+    function fail(msg) {
+      console.error("PCF loader:", msg);
+      var el = document.getElementById("root");
+      if (el) el.innerHTML =
+        '<div style="font:14px/1.5 system-ui,Segoe UI,Arial;max-width:640px;margin:60px auto;padding:24px;'
+        + 'border:1px solid #f0c0c0;border-radius:12px;color:#8a1020;background:#fff5f5">'
+        + '<b>The Petty Cash Portal failed to load.</b><br><br>' + msg
+        + '<br><br>Check that the whole <code>src/</code> folder was uploaded next to '
+        + '<code>index.html</code>, then hard-refresh (Ctrl+F5).</div>';
+    }
+    if (!window.Babel) { fail("Babel (in-browser transpiler) did not load. Check your internet connection."); return; }
+    Promise.all(window.PCP_SRC_FILES.map(function (f) {
+      return fetch(f + "?v=" + V).then(function (r) {
+        if (!r.ok) throw new Error("Could not fetch " + f + " (HTTP " + r.status + ")");
+        return r.text();
+      }).then(function (t) { return "/* ===================== " + f + " ===================== */\n" + t; });
+    })).then(function (parts) {
+      var code = parts.join("\n\n");
+      var out;
+      try {
+        out = window.Babel.transform(code, { presets: ["react"], filename: "PettyCashPortal.jsx" }).code;
+      } catch (e) {
+        fail("Transpile error: " + (e && e.message ? e.message : e)); return;
+      }
+      var url = URL.createObjectURL(new Blob([out], { type: "text/javascript" }));
+      import(url).catch(function (e) { fail("Runtime error: " + (e && e.message ? e.message : e)); });
+    }).catch(function (e) { fail(e && e.message ? e.message : String(e)); });
+  })();
+</script>
 </body>
 </html>
