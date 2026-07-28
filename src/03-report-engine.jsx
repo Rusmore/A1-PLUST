@@ -15,11 +15,29 @@ const REPORT_LOGO_A1 = (() => {
   try { return new URL(encodeURI("A1 PAPER LOGO.png"), document.baseURI).href; }
   catch (e) { return "A1 PAPER LOGO.png"; }
 })();
+/* RG & Co. Property Management Corporation has no bundled PNG yet — prefer an
+   "RG PAPER LOGO.png" if one is uploaded beside index.html, otherwise fall back
+   to a clean built-in SVG monogram so the report still renders professionally. */
+const REPORT_LOGO_RG = (() => {
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='150' height='54' viewBox='0 0 150 54'>" +
+    "<rect x='1' y='1' width='148' height='52' rx='7' fill='#ffffff' stroke='#1f4e79' stroke-width='2'/>" +
+    "<text x='75' y='26' font-family='Georgia, serif' font-size='20' font-weight='700' fill='#1f4e79' text-anchor='middle'>RG &amp; CO.</text>" +
+    "<text x='75' y='42' font-family='Arial, sans-serif' font-size='7.5' letter-spacing='1' fill='#444' text-anchor='middle'>PROPERTY MANAGEMENT CORP.</text>" +
+    "</svg>";
+  return "data:image/svg+xml;utf8," + encodeURIComponent(svg);
+})();
 
-/* The header company name + logo follow the report's scope: A1+ reports show the
-   A1+ company/logo, everything else falls back to the Starkson parent. */
+/* The header company name + logo follow the report's scope. Both are resolved
+   from the Fund & Master Data company registry (COMPANY_PROFILES) so any new
+   company automatically gets the right branding with no template edits; the
+   A1+/Starkson heuristic remains only as a last-resort fallback. */
 const companyHeaderName = (company) => (company ? String(company).toUpperCase() : COMPANY_MAIN);
-const logoForCompany = (company) => (company && /a1\+/i.test(String(company)) ? REPORT_LOGO_A1 : REPORT_LOGO);
+const logoForCompany = (company) => {
+  const p = (typeof companyProfile === "function") ? companyProfile(company) : null;
+  if (p && p.logo) return p.logo;
+  return (company && /a1\+/i.test(String(company))) ? REPORT_LOGO_A1 : REPORT_LOGO;
+};
 
 /* Currency formatted exactly as requested in the report spec: PHP 1,234,567.89
    (negatives are parenthesised, accounting style). */
@@ -529,8 +547,8 @@ function reportPrintHTML(doc) {
   </table>
   <div class="sign">
     <div class="box"><div class="who">Prepared by:</div><div class="line">${esc((doc.meta && doc.meta.Custodian) || "")}</div><div class="role">Custodian</div></div>
-    <div class="box"><div class="who">Reviewed by:</div><div class="line">&nbsp;</div><div class="role">Accounting Manager</div></div>
-    <div class="box"><div class="who">Approved by:</div><div class="line">&nbsp;</div><div class="role">Finance Director</div></div>
+    <div class="box"><div class="who">Reviewed by:</div><div class="line">&nbsp;</div><div class="role">${esc(doc.reviewer || "Manager")}</div></div>
+    <div class="box"><div class="who">Approved by:</div><div class="line">${esc(doc.approver || "Grace P. Gan")}</div><div class="role">${esc(doc.approverRole || "Finance Director")}</div></div>
   </div>
   <script>window.onload=function(){setTimeout(function(){window.print();},350);};window.onafterprint=function(){setTimeout(function(){window.close();},100);};</script>
 </body></html>`;

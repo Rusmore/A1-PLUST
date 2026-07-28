@@ -409,6 +409,255 @@ function DrillDownModal({ chartName, label, columns, records, canEdit, onEditRec
   );
 }
 
+/* ---- Interactive Department drill-down --------------------------------
+   A self-contained dashboard panel: a Department pie chart cross-filters an
+   inline, paginated transaction table (no modal, no navigation). Clicking a
+   slice toggles the department filter; the pie itself reflects every OTHER
+   active filter, while the table and summary cards reflect ALL filters. */
+const DEPT_LIQ_STATUSES = ["Not Liquidated", "Partially Liquidated", "Fully Liquidated", "Over-Liquidated"];
+
+function DeptDrilldownPanel({ funds, requests, disbursements, liquidations }) {
+  const today = todayISO();
+  const [dept, setDept] = useState(null);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [fCompany, setFCompany] = useState("ALL");
+  const [fPlant, setFPlant] = useState("ALL");
+  const [fBranch, setFBranch] = useState("ALL");
+  const [fCategory, setFCategory] = useState("ALL");
+  const [fLiq, setFLiq] = useState("ALL");
+  const [fAging, setFAging] = useState("ALL");
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+
+  /* Enrich each disbursement once with its request/liquidation, plant label and
+     aging status. Money values stay numeric so totals stay exact. */
+  const rows = useMemo(() => {
+    const fundByBranch = new Map((funds || []).map((f) => [f.branchCode, f]));
+    return (disbursements || []).map((d) => {
+      const base = enrichDisbursement(d, requests, liquidations);
+      const fund = fundByBranch.get(d.branchCode);
+      const fully = base.status === "Fully Liquidated" || base.status === "Over-Liquidated";
+      const ageDays = Math.max(0, daysBetween(base._date, today));
+      return {
+        ...base,
+        plantLabel: (fund && fund.label) || plantLabel(d.branchCode) || d.branchCode,
+        agingStatus: agingStatusOf(ageDays, fully),
+      };
+    });
+  }, [disbursements, requests, liquidations, funds, today]);
+
+  /* Predicate for every filter except (optionally) the department, so the pie
+     can be built from the other filters while the table applies them all. */
+  const passes = useCallback((r, skipDept) => {
+    if (from && (r._date || "") < from) return false;
+    if (to && (r._date || "") > to) return false;
+    if (fCompany !== "ALL" && r.company !== fCompany) return false;
+    if (fPlant !== "ALL" && r.branch !== fPlant) return false;
+    if (fBranch !== "ALL" && r.branch !== fBranch) return false;
+    if (fCategory !== "ALL" && (r.expenseCategory || "Unassigned") !== fCategory) return false;
+    if (fLiq !== "ALL" && r.status !== fLiq) return false;
+    if (fAging !== "ALL" && r.agingStatus !== fAging) return false;
+    if (!skipDept && dept && r.department !== dept) return false;
+    return true;
+  }, [from, to, fCompany, fPlant, fBranch, fCategory, fLiq, fAging, dept]);
+
+  const rowsMinusDept = useMemo(() => rows.filter((r) => passes(r, true)), [rows, passes]);
+  const finalRows = useMemo(() => (dept ? rowsMinusDept.filter((r) => r.department === dept) : rowsMinusDept), [rowsMinusDept, dept]);
+
+  const deptDist = useMemo(() => {
+    const g = groupSum(rowsMinusDept, (r) => r.department || "Unassigned", (r) => r.amount);
+    return g.sort((a, b) => b.value - a.value);
+  }, [rowsMinusDept]);
+
+  /* Option lists derived from the data. */
+  const opts = useMemo(() => {
+    const uniq = (fn) => Array.from(new Set(rows.map(fn).filter(Boolean))).sort();
+    return {
+      companies: uniq((r) => r.company),
+      plants: Array.from(new Map(rows.map((r) => [r.branch, r.plantLabel])).entries()).map(([code, label]) => ({ code, label })).sort((a, b) => a.label.localeCompare(b.label)),
+      categories: uniq((r) => r.expenseCategory || "Unassigned"),
+      departments: uniq((r) => r.department || "Unassigned"),
+    };
+  }, [rows]);
+
+  const summary = useMemo(() => finalRows.reduce((s, r) => ({
+    count: s.count + 1,
+    requested: s.requested + (Number(r.amountRequested) || 0),
+    released: s.released + (Number(r.amount) || 0),
+    liquidated: s.liquidated + (Number(r.amountLiquidated) || 0),
+    outstanding: s.outstanding + (Number(r.remaining) || 0),
+  }), { count: 0, requested: 0, released: 0, liquidated: 0, outstanding: 0 }), [finalRows]);
+
+  useEffect(() => { setPage(0); }, [from, to, fCompany, fPlant, fBranch, fCategory, fLiq, fAging, dept, pageSize]);
+
+  const total = finalRows.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const start = page * pageSize;
+  const pageRows = finalRows.slice(start, start + pageSize);
+
+  const clearAll = () => {
+    setDept(null); setFrom(""); setTo("");
+    setFCompany("ALL"); setFPlant("ALL"); setFBranch("ALL");
+    setFCategory("ALL"); setFLiq("ALL"); setFAging("ALL");
+  };
+  const anyFilter = dept || from || to || fCompany !== "ALL" || fPlant !== "ALL" || fBranch !== "ALL" || fCategory !== "ALL" || fLiq !== "ALL" || fAging !== "ALL";
+
+  const toggleDept = (name) => { if (!name) return; setDept((cur) => (cur === name ? null : name)); };
+  const liqBadge = (s) => s === "Fully Liquidated" ? "green" : s === "Partially Liquidated" ? "amber" : s === "Over-Liquidated" ? "blue" : "gray";
+  const agingBadge = (s) => s === "Completed" ? "green" : s === "Not Yet Due" ? "blue" : s === "Due Today" ? "amber" : "red";
+
+  return (
+    <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16 }}>
+      <div className="pcp-section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <span><LayoutDashboard size={15} color="#c8102e" /> Department Analysis &amp; Transaction Drill-Down</span>
+        {anyFilter && <button className="pcp-btn pcp-btn-ghost pcp-btn-sm" onClick={clearAll}><X size={13} /> Clear Filters</button>}
+      </div>
+
+      <div className="pcp-grid-2" style={{ alignItems: "start" }}>
+        {/* ---- Pie chart ---- */}
+        <div className="pcp-chart-click" title="Click to filter transactions">
+          {deptDist.length ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie data={deptDist} dataKey="value" nameKey="name" innerRadius={55} outerRadius={95} paddingAngle={2}
+                  cursor="pointer" onClick={(s) => toggleDept(pickName(s))} isAnimationActive={true}>
+                  {deptDist.map((entry, i) => {
+                    const selected = dept === entry.name;
+                    return <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} cursor="pointer"
+                      stroke={selected ? "#111827" : "#fff"} strokeWidth={selected ? 2.5 : 1}
+                      opacity={dept && !selected ? 0.3 : 1} />;
+                  })}
+                </Pie>
+                <Legend wrapperStyle={{ fontSize: 11, cursor: "pointer" }} onClick={(e) => toggleDept(e && e.value)} />
+                <Tooltip formatter={(v, n) => [peso(v), n]} contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e3e5ea" }} />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : <div className="pcp-empty">No disbursements match the current filters</div>}
+          <div className="pcp-chart-hint">Click a slice (or legend) to filter the table below · click again to clear.</div>
+        </div>
+
+        {/* ---- Cross-filters ---- */}
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+            <div className="pcp-rc-field"><label>Department</label>
+              <select className="pcp-select" value={dept || "ALL"} onChange={(e) => setDept(e.target.value === "ALL" ? null : e.target.value)}>
+                <option value="ALL">All Departments</option>
+                {opts.departments.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Company</label>
+              <select className="pcp-select" value={fCompany} onChange={(e) => setFCompany(e.target.value)}>
+                <option value="ALL">All</option>{opts.companies.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Plant</label>
+              <select className="pcp-select" value={fPlant} onChange={(e) => setFPlant(e.target.value)}>
+                <option value="ALL">All</option>{opts.plants.map((p) => <option key={p.code} value={p.code}>{p.label}</option>)}
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Branch</label>
+              <select className="pcp-select" value={fBranch} onChange={(e) => setFBranch(e.target.value)}>
+                <option value="ALL">All</option>{opts.plants.map((p) => <option key={p.code} value={p.code}>{p.code}</option>)}
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Expense Category</label>
+              <select className="pcp-select" value={fCategory} onChange={(e) => setFCategory(e.target.value)}>
+                <option value="ALL">All</option>{opts.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Liquidation Status</label>
+              <select className="pcp-select" value={fLiq} onChange={(e) => setFLiq(e.target.value)}>
+                <option value="ALL">All</option>{DEPT_LIQ_STATUSES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Aging Status</label>
+              <select className="pcp-select" value={fAging} onChange={(e) => setFAging(e.target.value)}>
+                <option value="ALL">All</option>{AGING_BUCKETS.map((c) => <option key={c} value={c}>{c}</option>)}<option value="Completed">Completed</option>
+              </select>
+            </div>
+            <div className="pcp-rc-field"><label>Date From</label>
+              <input type="date" className="pcp-input" value={from} onChange={(e) => setFrom(e.target.value)} />
+            </div>
+            <div className="pcp-rc-field"><label>Date To</label>
+              <input type="date" className="pcp-input" value={to} onChange={(e) => setTo(e.target.value)} />
+            </div>
+          </div>
+
+          {/* ---- Summary cards (reflect all active filters) ---- */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 12 }}>
+            <div className="pcp-mini-stat"><div className="lbl">Transactions</div><div className="val">{summary.count}</div></div>
+            <div className="pcp-mini-stat"><div className="lbl">Amount Released</div><div className="val">{peso(summary.released)}</div></div>
+            <div className="pcp-mini-stat"><div className="lbl">Amount Liquidated</div><div className="val">{peso(summary.liquidated)}</div></div>
+            <div className="pcp-mini-stat"><div className="lbl">Amount Requested</div><div className="val">{peso(summary.requested)}</div></div>
+            <div className="pcp-mini-stat"><div className="lbl">Outstanding</div><div className="val" style={{ color: summary.outstanding > 0 ? "var(--brand)" : "inherit" }}>{peso(summary.outstanding)}</div></div>
+          </div>
+        </div>
+      </div>
+
+      {/* ---- Active filter chip + count ---- */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "14px 0 8px", flexWrap: "wrap" }}>
+        {dept ? (
+          <span className="pcp-filter-chip">Department: <b>{dept}</b><button onClick={() => setDept(null)} title="Clear department filter"><X size={12} /></button></span>
+        ) : <span style={{ fontSize: 12, color: "var(--text-mut)" }}>Showing all departments</span>}
+        <span style={{ fontSize: 12, color: "var(--text-mut)", marginLeft: "auto" }}>{total} matching transaction{total !== 1 ? "s" : ""}</span>
+      </div>
+
+      {/* ---- Filtered transaction table ---- */}
+      <div className="pcp-table-wrap" style={{ transition: "opacity 0.15s ease" }}>
+        <table className="pcp-table">
+          <thead>
+            <tr>
+              <th>Request No.</th><th>Request Date</th><th>Release Date</th><th>Department</th>
+              <th>Plant</th><th>Branch</th><th>Company</th><th>Requestor</th><th>Payee</th>
+              <th>Purpose</th><th>Expense Category</th>
+              <th style={{ textAlign: "right" }}>Amt Requested</th><th style={{ textAlign: "right" }}>Amt Released</th>
+              <th style={{ textAlign: "right" }}>Amt Liquidated</th><th style={{ textAlign: "right" }}>Outstanding</th>
+              <th style={{ textAlign: "center" }}>Liquidation Status</th><th style={{ textAlign: "center" }}>Aging Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageRows.length ? pageRows.map((r) => (
+              <tr key={r.id}>
+                <td>{r.requestNo}</td>
+                <td>{r.dateRequested}</td>
+                <td>{r.date}</td>
+                <td>{r.department}</td>
+                <td>{r.plantLabel}</td>
+                <td>{r.branch}</td>
+                <td>{r.company}</td>
+                <td>{r.requestor}</td>
+                <td>{r.payee}</td>
+                <td style={{ maxWidth: 220, whiteSpace: "normal" }}>{r.purpose}</td>
+                <td>{r.expenseCategory}</td>
+                <td className="pcp-num">{peso(r.amountRequested)}</td>
+                <td className="pcp-num">{peso(r.amount)}</td>
+                <td className="pcp-num">{peso(r.amountLiquidated)}</td>
+                <td className="pcp-num" style={{ fontWeight: 700, color: r.remaining > 0 ? "var(--brand)" : "inherit" }}>{peso(r.remaining)}</td>
+                <td style={{ textAlign: "center" }}><span className={"pcp-badge pcp-badge-" + liqBadge(r.status)}>{r.status}</span></td>
+                <td style={{ textAlign: "center" }}><span className={"pcp-badge pcp-badge-" + agingBadge(r.agingStatus)}>{r.agingStatus}</span></td>
+              </tr>
+            )) : <tr><td colSpan={17} className="pcp-empty">No transactions match the selected filters.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {total > 0 && (
+        <div className="pcp-pager">
+          <span>Rows:</span>
+          <select className="pcp-select" style={{ width: 72 }} value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+            {DRILL_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <span>{start + 1}–{Math.min(start + pageSize, total)} of {total}</span>
+          <button className="pcp-btn pcp-btn-sm" disabled={page <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Prev</button>
+          <span>Page {page + 1} / {pageCount}</span>
+          <button className="pcp-btn pcp-btn-sm" disabled={page >= pageCount - 1} onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}>Next</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard({ funds, requests, disbursements, liquidations, replenishments, onNavigate, canEdit }) {
   const [drill, setDrill] = useState(null);
   const openDrill = (chartName, label) => { if (label == null || label === "") return; setDrill({ chartName, label: String(label) }); };
@@ -591,6 +840,8 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
           <div className="pcp-chart-hint">Click a bar to view its transactions.</div>
         </div>
       </div>
+
+      <DeptDrilldownPanel funds={funds} requests={requests} disbursements={disbursements} liquidations={liquidations} />
 
       <div className="pcp-grid-2">
         <div className="pcp-card pcp-card-pad">

@@ -9,6 +9,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const [liquidations, setLiquidations] = useState([]);
   const [replenishments, setReplenishments] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [role, setRole] = useState(userRole || "Accounting");
   /* Non-admins are locked to their assigned role; admins may view-as any role. */
   useEffect(() => { setRole(userRole || "Accounting"); }, [userRole]);
@@ -73,7 +74,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         user: userName || (userEmail || "User"), action: "Signed Out",
         entity: userEmail || "—", remarks: "",
       }];
-      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next }); } catch (e) {}
+      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next, documents }); } catch (e) {}
       return next;
     });
     if (onSignOut) onSignOut();
@@ -95,6 +96,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         setLiquidations(saved.liquidations || []);
         setReplenishments(saved.replenishments || []);
         setAuditLog(saved.auditLog || []);
+        setDocuments(saved.documents || []);
       } else {
         /* First load after this upgrade — keep master funds but clear ALL
            existing transactions so the system starts with a clean database. */
@@ -104,6 +106,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         setLiquidations([]);
         setReplenishments([]);
         setAuditLog([]);
+        setDocuments([]);
       }
       setLoaded(true);
     })();
@@ -111,8 +114,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
 
   useEffect(() => {
     if (!loaded) return;
-    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog });
-  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, loaded]);
+    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents });
+  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, loaded]);
 
   /* ---- Requests ---- */
   const addRequest = useCallback((form) => {
@@ -255,6 +258,51 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     const map = new Map(updates.map((u) => [u.id, u.beginningBalance]));
     setFunds((fs) => fs.map((x) => (map.has(x.id) ? { ...x, beginningBalance: map.get(x.id) } : x)));
   }, []);
+
+  /* ---- PCF Documents ---- */
+  const docTs = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+  const addDocuments = useCallback((docs) => {
+    setDocuments((ds) => [...docs, ...ds]);
+    docs.forEach((d) => logAudit("Document Uploaded", d.refNo, `${d.category} · ${d.name}`));
+  }, [logAudit]);
+  const updateDocument = useCallback((id, patch, action, remarks) => {
+    const ts = docTs();
+    setDocuments((ds) => ds.map((d) => {
+      if (d.id !== id) return d;
+      const next = { ...d, ...patch, lastModified: ts };
+      if (action) next.activity = [...(d.activity || []), { action, user: userName || role, ts, ip: "Local" }];
+      return next;
+    }));
+    if (action) { const d = documents.find((x) => x.id === id); logAudit("Document " + action, (d && d.refNo) || id, remarks || (d ? d.name : "")); }
+  }, [documents, logAudit, userName, role]);
+  const replaceDocument = useCallback((id, file, by) => {
+    const ts = docTs();
+    setDocuments((ds) => ds.map((d) => {
+      if (d.id !== id) return d;
+      const version = (d.version || 1) + 1;
+      const versions = [...(d.versions || []), { version, name: file.name, size: file.size, uploadedBy: by, date: todayISO() }];
+      return {
+        ...d, name: file.name, size: file.size, type: file.type, dataUrl: file.dataUrl,
+        version, versions, lastModified: ts,
+        activity: [...(d.activity || []), { action: "Replaced", user: by || userName || role, ts, ip: "Local" }],
+      };
+    }));
+    const d = documents.find((x) => x.id === id);
+    logAudit("Document Replaced", (d && d.refNo) || id, file.name);
+  }, [documents, logAudit, userName, role]);
+  const deleteDocument = useCallback((id) => {
+    const d = documents.find((x) => x.id === id);
+    setDocuments((ds) => ds.filter((x) => x.id !== id));
+    logAudit("Document Deleted", (d && d.refNo) || id, d ? d.name : "");
+  }, [documents, logAudit]);
+  const docActivity = useCallback((id, action, remarks) => {
+    const ts = docTs();
+    setDocuments((ds) => ds.map((d) => d.id === id
+      ? { ...d, activity: [...(d.activity || []), { action, user: userName || role, ts, ip: "Local" }] }
+      : d));
+    const d = documents.find((x) => x.id === id);
+    logAudit("Document " + action, (d && d.refNo) || id, remarks || (d ? d.name : ""));
+  }, [documents, logAudit, userName, role]);
 
   /* ---- Plant-scoped views ---- */
   /* Every module only receives data for plants the user is allowed to see, so a
@@ -488,7 +536,14 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         {activeModule === "audit" && (
           <AuditTrailTab auditLog={auditLog} />
         )}
-        {activeModule === "masterdata" && (
+        {activeModule === "documents" && (
+          <PcfDocumentsTab
+            documents={documents} funds={funds} plantOptions={plantOptions}
+            userName={userName} role={role} isAdmin={isAdmin}
+            onAdd={addDocuments} onReplace={replaceDocument} onUpdate={updateDocument}
+            onDelete={deleteDocument} onActivity={docActivity}
+          />
+        )}        {activeModule === "masterdata" && (
           <MasterDataTab
             funds={funds} disbursements={disbursements} liquidations={liquidations} replenishments={replenishments}
             onAddFund={addFund} onEditFund={editFund} onDeleteFund={deleteFund}

@@ -92,7 +92,7 @@ const BRANCHES = [
   {
     "code": "RG",
     "name": "RG and Co.",
-    "company": "RG and Co."
+    "company": "RG & Co. Property Management Corporation"
   }
 ];
 
@@ -101,8 +101,33 @@ const COMPANIES = [
   "Starkson Paper and Plastic Corporation",
   "Happy Alliance Mono Film, Inc.",
   "Starkson Industries Inc.",
-  "RG and Co."
+  "RG & Co. Property Management Corporation"
 ];
+
+/* ---------------------------------------------------------------------------
+   COMPANY PROFILE REGISTRY (part of the Fund & Master Data module)
+   Single source of truth for report branding + signatories. The Report Center
+   reads the logo, reviewer and approver straight from here based on the company
+   resolved from the selected Plant — so nothing is hardcoded in the report
+   template and any new company/plant is picked up automatically.
+--------------------------------------------------------------------------- */
+const DEFAULT_REVIEWER = "Manager";
+const DEFAULT_APPROVER = "Grace P. Gan";
+const DEFAULT_APPROVER_ROLE = "Finance Director";
+const COMPANY_PROFILES = {
+  "A1+ Paper and Plastic Inc.": {
+    logo: REPORT_LOGO_A1, reviewer: DEFAULT_REVIEWER, approver: DEFAULT_APPROVER, approverRole: DEFAULT_APPROVER_ROLE,
+  },
+  "Starkson Paper and Plastic Corporation": {
+    logo: REPORT_LOGO, reviewer: DEFAULT_REVIEWER, approver: DEFAULT_APPROVER, approverRole: DEFAULT_APPROVER_ROLE,
+  },
+  "RG & Co. Property Management Corporation": {
+    logo: REPORT_LOGO_RG, reviewer: DEFAULT_REVIEWER, approver: DEFAULT_APPROVER, approverRole: DEFAULT_APPROVER_ROLE,
+  },
+};
+/* Resolve the branding/signatory profile for a company (null when unknown so
+   callers can fall back to sensible defaults). */
+const companyProfile = (company) => COMPANY_PROFILES[company] || null;
 
 /* The four operating petty-cash plants used for plant-scoped access control,
    per-plant dashboards, and the plant selector shown inside each module. */
@@ -727,9 +752,9 @@ const taxCategoryLabel = (code) => {
 /* Each role only sees the nav tabs relevant to it. Plant-level data access is
    controlled separately (per user) so a custodian only sees their own plants. */
 const ROLES = {
-  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "audit", "masterdata", "users", "settings"] },
-  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "audit", "masterdata"] },
-  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging"] },
+  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
+  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata"] },
+  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents"] },
 };
 const ROLE_NAMES = Object.keys(ROLES);
 
@@ -765,10 +790,18 @@ function buildNotifications(requests, disbursements, liquidations, replenishment
   });
   disbursements.forEach((d) => {
     const status = liqStatusFor(d, liquidations);
-    if (status === "Fully Liquidated") return;
+    if (status === "Fully Liquidated" || status === "Over-Liquidated") return;
     const ageDays = Math.floor((Date.now() - new Date((d.date || todayISO()) + "T00:00:00").getTime()) / 86400000);
-    if (ageDays >= 15) out.push({ id: "n-over-" + d.id, type: "overdue", icon: "alert", title: "Liquidation overdue", text: `${d.voucherNo} · ${d.employee} · ${ageDays} days outstanding`, date: d.date });
-    else out.push({ id: "n-liq-" + d.id, type: "liquidation", icon: "sheet", title: "Liquidation due", text: `${d.voucherNo} · ${d.employee} · ${peso(d.amount)}`, date: d.date });
+    const kind = d.transactionType || (d.isReimbursement ? "Reimbursement" : "Petty Cash");
+    const who = `${d.voucherNo} · ${d.employee}`;
+    if (ageDays >= 6)
+      out.push({ id: "n-over-" + d.id, type: "overdue", icon: "alert", title: `${kind} liquidation overdue`, text: `${who} · ${ageDays} days outstanding — please liquidate now`, date: d.date });
+    else if (ageDays === 5)
+      out.push({ id: "n-due-" + d.id, type: "overdue", icon: "alert", title: `${kind} liquidation due today`, text: `${who} · due today (Day 5 of 5)`, date: d.date });
+    else if (ageDays === 4)
+      out.push({ id: "n-rem-" + d.id, type: "liquidation", icon: "sheet", title: `${kind} liquidation due tomorrow`, text: `${who} · reminder — liquidation is due tomorrow`, date: d.date });
+    else
+      out.push({ id: "n-liq-" + d.id, type: "liquidation", icon: "sheet", title: `${kind} liquidation pending`, text: `${who} · ${peso(d.amount)}`, date: d.date });
   });
   (replenishments || []).forEach((r) => {
     if (r.status === "Completed") out.push({ id: "n-rep-" + r.id, type: "replenished", icon: "refresh", title: "Replenishment completed", text: `${r.replenishmentNo} · ${peso(r.amount)}`, date: r.date });

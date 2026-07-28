@@ -56,11 +56,17 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
 
   const reference = useMemo(() => makeReportRef(def.code), [def.code, F, type]);
 
-  const doc = useMemo(() => ({
-    title: def.label, orientation: ort, columns: built.columns, rows: built.rows,
-    totalsRow: built.totalsRow, count: built.count, meta, reference, watermark,
-    company: scopeCompany, logo: logoForCompany(scopeCompany),
-  }), [def.label, ort, built, meta, reference, watermark, scopeCompany]);
+  const doc = useMemo(() => {
+    const profile = companyProfile(scopeCompany);
+    return {
+      title: def.label, orientation: ort, columns: built.columns, rows: built.rows,
+      totalsRow: built.totalsRow, count: built.count, meta, reference, watermark,
+      company: scopeCompany, logo: logoForCompany(scopeCompany),
+      reviewer: (profile && profile.reviewer) || DEFAULT_REVIEWER,
+      approver: (profile && profile.approver) || DEFAULT_APPROVER,
+      approverRole: (profile && profile.approverRole) || DEFAULT_APPROVER_ROLE,
+    };
+  }, [def.label, ort, built, meta, reference, watermark, scopeCompany]);
 
   const resetFilters = () => setF({ from: "", to: "", company: "", plant: "", branch: "", custodian: "", status: "", category: "", account: "" });
 
@@ -212,8 +218,8 @@ function ManagementReportTab({ funds, requests, disbursements, liquidations, rep
             </div>
             <div className="pcp-doc-sign">
               <div className="box"><div className="who">Prepared by:</div><div className="line">{meta.Custodian}</div><div className="role">Custodian</div></div>
-              <div className="box"><div className="who">Reviewed by:</div><div className="line">&nbsp;</div><div className="role">Accounting Manager</div></div>
-              <div className="box"><div className="who">Approved by:</div><div className="line">&nbsp;</div><div className="role">Finance Director</div></div>
+              <div className="box"><div className="who">Reviewed by:</div><div className="line">&nbsp;</div><div className="role">{doc.reviewer}</div></div>
+              <div className="box"><div className="who">Approved by:</div><div className="line">{doc.approver}</div><div className="role">{doc.approverRole}</div></div>
             </div>
           </div>
         </div>

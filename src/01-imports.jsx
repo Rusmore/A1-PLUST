@@ -6,7 +6,8 @@ import {
   Edit3, ChevronRight, Banknote, ClipboardList, PiggyBank, CircleDollarSign,
   ArrowUpRight, ArrowDownRight, FileSpreadsheet, RefreshCw, Filter as FilterIcon,
   Printer, Bell, History, ShieldCheck, ArrowLeftRight, Clock, UserCog, Landmark, LogOut,
-  Settings, KeyRound
+  Settings, KeyRound, FolderOpen, Upload, UploadCloud, Star, Archive, ArchiveRestore,
+  Eye, File as FileIcon, Paperclip
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,

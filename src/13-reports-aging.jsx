@@ -36,12 +36,17 @@ function EditBalancesModal({ funds, onClose, onSave }) {
    and fund (master data) records, so a newly created plant in Funds & Master
    Data automatically appears in the aging report, dashboard, charts and exports
    with no code change. */
-const AGING_DUE_DAYS = 15;
+const AGING_DUE_DAYS = 5;
 
-/* Ordered aging buckets used for filtering and analytics. Fully settled
-   vouchers are reported as "Completed" and excluded from the outstanding
-   buckets below. */
-const AGING_BUCKETS = ["Not Yet Due", "1-30 Days", "31-60 Days", "61-90 Days", "Over 90 Days"];
+/* Ordered aging statuses used for filtering and analytics. Based on the number
+   of CALENDAR DAYS after cash release / reimbursement, per the shared 5-day
+   liquidation policy:
+     0-4 days  -> Not Yet Due
+     5 days    -> Due Today
+     6-10 days -> Overdue
+     >10 days  -> Critically Overdue
+   Fully settled transactions are reported as "Completed". */
+const AGING_BUCKETS = ["Not Yet Due", "Due Today", "Overdue", "Critically Overdue"];
 
 const daysBetween = (fromISO, toISO) => {
   const a = new Date((fromISO || todayISO()) + "T00:00:00").getTime();
@@ -56,12 +61,14 @@ const addDaysISO = (iso, days) => {
   return d.toISOString().slice(0, 10);
 };
 
-function agingBucketOf(overdueDays, isPastDue) {
-  if (!isPastDue) return "Not Yet Due";
-  if (overdueDays <= 30) return "1-30 Days";
-  if (overdueDays <= 60) return "31-60 Days";
-  if (overdueDays <= 90) return "61-90 Days";
-  return "Over 90 Days";
+/* Aging status from days-after-release, per the 5-calendar-day liquidation
+   policy shared by petty cash disbursements and employee reimbursements. */
+function agingStatusOf(ageDays, fullyLiquidated) {
+  if (fullyLiquidated) return "Completed";
+  if (ageDays <= 4) return "Not Yet Due";
+  if (ageDays === 5) return "Due Today";
+  if (ageDays <= 10) return "Overdue";
+  return "Critically Overdue";
 }
 
 /* Build one aging record per disbursement. Each record is tagged with its
@@ -89,8 +96,15 @@ function buildAgingRecords(disbursements, liquidations, funds, requests, today) 
     const isPending = !fullyLiquidated;
     const fund = fundByBranch.get(d.branchCode);
     const req = reqById.get(d.requestId);
+    /* Transaction type — reimbursements follow the SAME 5-day policy once the
+       company has released the reimbursed amount. Derived from a flag on the
+       disbursement or its originating request; defaults to Petty Cash. */
+    const transactionType = d.transactionType || (req && req.transactionType)
+      || ((d.isReimbursement || (req && req.isReimbursement)) ? "Reimbursement" : "Petty Cash");
     return {
       id: d.id, voucherNo: d.voucherNo, releaseDate, dueDate,
+      transactionType,
+      requestNo: (req && req.requestNo) || "\u2014",
       employee: d.employee,
       requestor: (req && req.employee) || d.employee,
       department: d.department,
@@ -100,7 +114,7 @@ function buildAgingRecords(disbursements, liquidations, funds, requests, today) 
       custodian: (fund && fund.custodian) || "\u2014",
       amount, liquidated, outstanding, status, fullyLiquidated,
       ageDays, overdueDays, isPastDue, isDueToday, isPending,
-      agingBucket: fullyLiquidated ? "Completed" : agingBucketOf(overdueDays, isPastDue),
+      agingBucket: agingStatusOf(ageDays, fullyLiquidated),
       liqStatus: fullyLiquidated ? "Completed" : (isPastDue ? "Overdue" : (isDueToday ? "Due Today" : "Pending")),
       expenseCategory: d.expenseCategory || "",
     };
@@ -158,13 +172,13 @@ function downloadTextFile(text, filename, mime) {
 function LiquidationAgingTab({ funds, requests, disbursements, liquidations, replenishments }) {
   const today = todayISO();
   const [filters, setFilters] = useState({
-    company: "ALL", plant: "ALL", branch: "ALL", custodian: "ALL",
+    txnType: "ALL", company: "ALL", plant: "ALL", branch: "ALL", custodian: "ALL",
     requestor: "ALL", department: "ALL", status: "ALL", bucket: "ALL",
     from: "", to: "",
   });
   const setF = (k, v) => setFilters((f) => ({ ...f, [k]: v }));
   const resetFilters = () => setFilters({
-    company: "ALL", plant: "ALL", branch: "ALL", custodian: "ALL",
+    txnType: "ALL", company: "ALL", plant: "ALL", branch: "ALL", custodian: "ALL",
     requestor: "ALL", department: "ALL", status: "ALL", bucket: "ALL", from: "", to: "",
   });
 
@@ -202,13 +216,14 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
   }, [allRecords, funds]);
 
   const records = useMemo(() => allRecords.filter((r) => {
+    if (filters.txnType !== "ALL" && r.transactionType !== filters.txnType) return false;
     if (filters.company !== "ALL" && r.company !== filters.company) return false;
     if (filters.plant !== "ALL" && r.branchCode !== filters.plant) return false;
     if (filters.branch !== "ALL" && r.branchCode !== filters.branch) return false;
     if (filters.custodian !== "ALL" && r.custodian !== filters.custodian) return false;
     if (filters.requestor !== "ALL" && r.requestor !== filters.requestor) return false;
     if (filters.department !== "ALL" && r.department !== filters.department) return false;
-    if (filters.status !== "ALL" && r.liqStatus !== filters.status) return false;
+    if (filters.status !== "ALL" && r.status !== filters.status) return false;
     if (filters.bucket !== "ALL" && r.agingBucket !== filters.bucket) return false;
     if (filters.from && r.releaseDate < filters.from) return false;
     if (filters.to && r.releaseDate > filters.to) return false;
@@ -287,12 +302,12 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
       "Overdue": p.overdue, "Completed": p.completed, "Compliance %": Math.round(p.compliance * 10) / 10,
     }));
     const detail = detailRows.map((r) => ({
-      "Voucher No.": r.voucherNo, "Plant": r.plantLabel, "Company": r.company, "Branch": r.branchCode,
-      "Custodian": r.custodian, "Requestor": r.requestor, "Employee": r.employee,
-      "Department": deptDesc(r.department), "Release Date": r.releaseDate, "Due Date": r.dueDate,
-      "Amount Released": r.amount, "Liquidated": r.liquidated, "Outstanding": r.outstanding,
-      "Age (days)": r.ageDays, "Overdue (days)": r.overdueDays, "Aging Bucket": r.agingBucket,
-      "Status": r.liqStatus,
+      "Transaction Type": r.transactionType, "Request No.": r.requestNo, "Voucher No.": r.voucherNo,
+      "Requestor": r.requestor, "Employee": r.employee, "Plant": r.plantLabel, "Branch": r.branchCode,
+      "Company": r.company, "Custodian": r.custodian, "Department": deptDesc(r.department),
+      "Release Date": r.releaseDate, "Due Date": r.dueDate, "Days Outstanding": r.ageDays,
+      "Amount": r.amount, "Liquidated": r.liquidated, "Outstanding": r.outstanding,
+      "Overdue (days)": r.overdueDays, "Liquidation Status": r.status, "Aging Status": r.agingBucket,
     }));
     return { plantRows, detail };
   }, [byPlant, detailRows]);
@@ -323,16 +338,19 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
   const selectedPlant = filters.plant !== "ALL" ? (opts.plants.find((p) => p.code === filters.plant) || null) : null;
   const bucketBadge = (r) => {
     if (r.fullyLiquidated) return "green";
-    if (r.isPastDue) return "red";
+    if (r.agingBucket === "Critically Overdue" || r.isPastDue) return "red";
     if (r.isDueToday) return "amber";
     return "blue";
   };
+  const statusBadge = (s) => s === "Fully Liquidated" ? "green"
+    : s === "Partially Liquidated" ? "amber"
+    : s === "Over-Liquidated" ? "blue" : "gray";
 
   return (
     <div>
       <TopBar
-        title="Liquidation Aging — All Plants"
-        sub="Centralized, enterprise-wide liquidation aging across every company, plant and branch"
+        title="Liquidation & Reimbursement Aging"
+        sub="Petty cash and employee reimbursements monitored under the shared 5-calendar-day liquidation policy"
         right={
           <>
             <button className="pcp-btn" onClick={() => window.print()}><Printer size={14} /> Print / PDF</button>
@@ -347,9 +365,9 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
             <img src={LOGO_A1} alt="A1+ Paper and Plastic Inc." />
             <img src={LOGO_SPI} alt="Starkson Paper and Plastic Corporation" />
             <div style={{ marginLeft: "auto", textAlign: "right" }}>
-              <div className="pcp-report-title">Liquidation Aging Report</div>
+              <div className="pcp-report-title">Liquidation &amp; Reimbursement Aging Report</div>
               <div className="pcp-report-sub">
-                Generated {fmtDate(today)} · Liquidation due {AGING_DUE_DAYS} days after release · {opts.plants.length} plant(s) monitored
+                Generated {fmtDate(today)} · Petty cash &amp; reimbursements due {AGING_DUE_DAYS} days after release · {opts.plants.length} plant(s) monitored
               </div>
             </div>
           </div>
@@ -359,6 +377,14 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
         <div className="pcp-card pcp-card-pad pcp-no-print" style={{ marginBottom: 16 }}>
           <div className="pcp-section-title"><FilterIcon size={15} color="#c8102e" /> Filters</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+            <div className="pcp-field" style={{ margin: 0 }}>
+              <label>Transaction Type</label>
+              <select className="pcp-select" value={filters.txnType} onChange={(e) => setF("txnType", e.target.value)}>
+                <option value="ALL">All Types</option>
+                <option value="Petty Cash">Petty Cash</option>
+                <option value="Reimbursement">Reimbursement</option>
+              </select>
+            </div>
             <div className="pcp-field" style={{ margin: 0 }}>
               <label>Company</label>
               <select className="pcp-select" value={filters.company} onChange={(e) => setF("company", e.target.value)}>
@@ -402,19 +428,19 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
               </select>
             </div>
             <div className="pcp-field" style={{ margin: 0 }}>
-              <label>Status</label>
+              <label>Liquidation Status</label>
               <select className="pcp-select" value={filters.status} onChange={(e) => setF("status", e.target.value)}>
-                <option value="ALL">All Statuses</option>
-                <option value="Pending">Pending</option>
-                <option value="Due Today">Due Today</option>
-                <option value="Overdue">Overdue</option>
-                <option value="Completed">Completed</option>
+                <option value="ALL">All Liquidation Statuses</option>
+                <option value="Not Liquidated">Not Liquidated</option>
+                <option value="Partially Liquidated">Partially Liquidated</option>
+                <option value="Fully Liquidated">Fully Liquidated</option>
+                <option value="Over-Liquidated">Over-Liquidated</option>
               </select>
             </div>
             <div className="pcp-field" style={{ margin: 0 }}>
-              <label>Aging Bucket</label>
+              <label>Aging Status</label>
               <select className="pcp-select" value={filters.bucket} onChange={(e) => setF("bucket", e.target.value)}>
-                <option value="ALL">All Buckets</option>
+                <option value="ALL">All Aging Statuses</option>
                 {AGING_BUCKETS.map((b) => <option key={b} value={b}>{b}</option>)}
                 <option value="Completed">Completed</option>
               </select>
@@ -547,28 +573,29 @@ function LiquidationAgingTab({ funds, requests, disbursements, liquidations, rep
             <table className="pcp-table">
               <thead>
                 <tr>
-                  <th>Voucher No.</th><th>Plant</th><th>Requestor</th><th>Department</th>
-                  <th>Release Date</th><th>Due Date</th><th>Released</th><th>Outstanding</th>
-                  <th>Age</th><th>Overdue</th><th>Bucket</th><th>Status</th>
+                  <th>Type</th><th>Request No.</th><th>Requestor</th><th>Plant</th><th>Branch</th><th>Company</th><th>Department</th>
+                  <th>Release Date</th><th>Due Date</th><th>Days Out</th><th>Amount</th>
+                  <th>Liquidation Status</th><th>Aging Status</th>
                 </tr>
               </thead>
               <tbody>
                 {detailRows.length ? detailRows.map((r) => (
                   <tr key={r.id}>
-                    <td>{r.voucherNo}</td>
-                    <td>{r.plantLabel}</td>
+                    <td><span className={"pcp-badge " + (r.transactionType === "Reimbursement" ? "pcp-badge-blue" : "pcp-badge-gray")}>{r.transactionType}</span></td>
+                    <td>{r.requestNo}</td>
                     <td>{r.requestor}</td>
+                    <td>{r.plantLabel}</td>
+                    <td>{r.branchCode}</td>
+                    <td>{r.company}</td>
                     <td>{deptDesc(r.department) || "\u2014"}</td>
                     <td>{fmtDate(r.releaseDate)}</td>
                     <td>{fmtDate(r.dueDate)}</td>
+                    <td className="pcp-num" style={{ fontWeight: 700, color: r.overdueDays > 0 ? "var(--brand)" : "inherit" }}>{r.ageDays}d</td>
                     <td className="pcp-num">{peso(r.amount)}</td>
-                    <td className="pcp-num" style={{ fontWeight: 700, color: r.outstanding > 0 ? "var(--brand)" : "inherit" }}>{peso(r.outstanding)}</td>
-                    <td className="pcp-num">{r.ageDays}d</td>
-                    <td className="pcp-num" style={{ color: r.overdueDays > 0 ? "var(--brand)" : "var(--text-mut)" }}>{r.overdueDays > 0 ? r.overdueDays + "d" : "\u2014"}</td>
+                    <td><span className={"pcp-badge pcp-badge-" + statusBadge(r.status)}>{r.status}</span></td>
                     <td><span className={"pcp-badge pcp-badge-" + bucketBadge(r)}>{r.agingBucket}</span></td>
-                    <td><span className={"pcp-badge pcp-badge-" + bucketBadge(r)}>{r.liqStatus}</span></td>
                   </tr>
-                )) : <tr><td colSpan={12} className="pcp-empty">No transactions match the selected filters</td></tr>}
+                )) : <tr><td colSpan={13} className="pcp-empty">No transactions match the selected filters</td></tr>}
               </tbody>
             </table>
           </div>

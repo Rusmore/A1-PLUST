@@ -397,6 +397,24 @@ const CSS = `
   .pcp-pager { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin-top: 14px; font-size: 12px; color: var(--text-mut); }
   .pcp-drill-count { font-size: 12px; color: var(--text-mut); }
 
+  /* ---- PCF Documents ---- */
+  .pcp-dropzone { border: 2px dashed #c3c8d4; border-radius: 12px; padding: 26px; text-align: center; cursor: pointer; transition: border-color 0.15s, background 0.15s; background: #fafbfd; }
+  .pcp-dropzone:hover { border-color: var(--brand); }
+  .pcp-dropzone.over { border-color: var(--brand); background: var(--red-bg); }
+  .pcp-progress { height: 8px; background: #eef0f3; border-radius: 99px; overflow: hidden; }
+  .pcp-progress-bar { height: 100%; background: var(--brand); border-radius: 99px; transition: width 0.2s ease; }
+  .pcp-hint { font-size: 12px; color: var(--text-mut); background: #f4f6f9; border-radius: 7px; padding: 8px 10px; }
+  .pcp-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-mut); font-weight: 600; }
+  .pcp-iconbtn { background: none; border: none; padding: 4px; margin: 0 1px; border-radius: 6px; cursor: pointer; color: var(--text-mut); vertical-align: middle; }
+  .pcp-iconbtn:hover { background: #eef0f3; color: var(--text); }
+
+  /* ---- Interactive department drill-down ---- */
+  .pcp-mini-stat { background: #f4f6f9; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .pcp-mini-stat .lbl { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text-mut); }
+  .pcp-mini-stat .val { font-size: 14px; font-weight: 800; margin-top: 2px; }
+  .pcp-filter-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; background: var(--red-bg); color: var(--brand); border: 1px solid #f0c9cf; border-radius: 99px; padding: 4px 6px 4px 12px; font-weight: 600; }
+  .pcp-filter-chip button { display: inline-flex; align-items: center; justify-content: center; background: var(--brand); color: #fff; border: none; border-radius: 99px; width: 18px; height: 18px; cursor: pointer; padding: 0; }
+
   /* ---- Print (management report) ---- */
   @media print {
     .pcp-sidebar, .pcp-topbar, .pcp-tabs, .pcp-no-print { display: none !important; }
@@ -439,6 +457,7 @@ const PLANT_MODULE_KEYS = PLANT_MODULES.map((m) => m.key);
 
 /* System-wide modules that stay as a single shared tab (not per plant). */
 const GLOBAL_MODULES = [
+  { key: "documents", label: "PCF Documents", icon: FolderOpen },
   { key: "audit", label: "Audit Trail", icon: ShieldCheck },
   { key: "masterdata", label: "Funds & Master Data", icon: Database },
   { key: "users", label: "User Management", icon: UserCog },
