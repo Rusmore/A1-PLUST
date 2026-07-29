@@ -700,6 +700,27 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
     [...liquidations].sort((a, b) => (b.createdDate || "").localeCompare(a.createdDate || "")).slice(0, 5),
     [liquidations]);
 
+  /* ---- Policy / approval widgets ---- */
+  const receiptStats = useMemo(() => {
+    let pending = 0, forRevision = 0;
+    liquidations.forEach((l) => {
+      const s = receiptApprovalSummary(l);
+      pending += s.pending;
+      if (s.anyRejected) forRevision++;
+    });
+    return { pending, forRevision };
+  }, [liquidations]);
+
+  const overdueLiquidations = useMemo(() => disbursements.filter((d) => {
+    if (liqStatusFor(d, liquidations) === "Fully Liquidated") return false;
+    const ageDays = Math.floor((Date.now() - new Date((d.date || todayISO()) + "T00:00:00").getTime()) / 86400000);
+    return ageDays > 5; // liquidation due within 5 calendar days
+  }).length, [disbursements, liquidations]);
+
+  const completedLiquidations = useMemo(() =>
+    disbursements.filter((d) => liqStatusFor(d, liquidations) === "Fully Liquidated").length,
+    [disbursements, liquidations]);
+
   /* Records behind the currently opened chart data point — computed lazily
      (only when a drill is open) so the dashboard itself never re-renders the
      full transaction list. */
@@ -767,7 +788,11 @@ function Dashboard({ funds, requests, disbursements, liquidations, replenishment
           onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />
         <KpiCard label="Pending Requests" value={m.pendingRequests} icon={ClipboardList} tint="#b9790a" foot="Awaiting approval" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
         <KpiCard label="Approved Requests" value={m.approvedRequests} icon={Check} tint="#2054a3" foot="Ready for release" onClick={onNavigate ? () => onNavigate("requests") : undefined} />
+        <KpiCard label="Receipts Waiting for Grace Gan's Approval" value={receiptStats.pending} icon={Receipt} tint="#c8102e" foot="Pending receipt approvals" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
+        <KpiCard label="Liquidations For Revision" value={receiptStats.forRevision} icon={AlertTriangle} tint="#c8102e" foot="Rejected receipt(s) — needs correction" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
         <KpiCard label="Pending Liquidations" value={m.pendingLiquidationCount} icon={FileSpreadsheet} tint="#2054a3" foot="Vouchers not fully liquidated" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
+        <KpiCard label="Overdue Liquidations" value={overdueLiquidations} icon={AlertTriangle} tint="#c8102e" foot="Past 5-day liquidation deadline" onClick={onNavigate ? () => onNavigate("aging") : undefined} />
+        <KpiCard label="Completed Liquidations" value={completedLiquidations} icon={Check} tint="#15803d" foot="Fully liquidated vouchers" onClick={onNavigate ? () => onNavigate("liquidation") : undefined} />
         <KpiCard label="Pending Replenishments" value={m.pendingReplenishments} icon={RefreshCw} tint="#b9790a" foot="Awaiting completion" onClick={onNavigate ? () => onNavigate("replenishment") : undefined} />
         <KpiCard label="Monthly Expenses" value={peso(m.monthlyExpenses)} icon={TrendingUp} tint="#c8102e" foot="Liquidated this month" onClick={onNavigate ? () => onNavigate("history") : undefined} />
         <KpiCard label="Active Petty Cash Funds" value={funds.length + " Funds"} icon={PiggyBank} tint="#7c3aed" foot="Across all plants" onClick={onNavigate ? () => onNavigate("masterdata") : undefined} />

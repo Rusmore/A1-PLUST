@@ -635,6 +635,7 @@ function Badge({ status }) {
     "Not Liquidated": "amber", "Partially Liquidated": "blue",
     "Fully Liquidated": "green", "Over-Liquidated": "red",
     Draft: "gray", Submitted: "amber", Verified: "blue", Completed: "green", Released: "green",
+    "For Revision": "red", "Pending Approval": "amber", "Receipts Approved": "green", "No Receipts": "gray",
   };
   const cls = map[status] || "gray";
   return <span className={`pcp-badge pcp-badge-${cls}`}>{status}</span>;

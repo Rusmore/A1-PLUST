@@ -4,7 +4,7 @@ function emptyLine() {
   return { id: uid("ln"), date: todayISO(), expense: "", category: EXPENSE_CATEGORIES[0], department: SUBACCOUNTS[1].code, amount: "", taxCategory: "" };
 }
 
-function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
+function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, canApproveReceipts, onDecideReceipt }) {
   const [lines, setLines] = useState(liquidation ? liquidation.lines.map((l) => ({ ...l })) : [emptyLine()]);
   const [attachments, setAttachments] = useState(liquidation && liquidation.attachments ? liquidation.attachments : []);
   const [saved, setSaved] = useState(true);
@@ -42,6 +42,7 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
         setAttachments((as) => [...as, {
           id: uid("att"), name: file.name, type: file.type || "file",
           size: file.size, data: reader.result, uploadedAt: todayISO(),
+          approvalStatus: "Pending", approvalHistory: [],
         }]);
         setSaved(false);
       };
@@ -53,6 +54,23 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
   const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const remaining = disbursement.amount - total;
   const validLines = lines.filter((l) => l.expense.trim() && Number(l.amount) > 0);
+
+  /* Receipt approval state is read from the PERSISTED liquidation so that
+     Grace Gan's decisions (saved immediately) are reflected here regardless of
+     unsaved worksheet edits. */
+  const persistedById = (id) => ((liquidation && liquidation.attachments) || []).find((a) => a.id === id);
+  const approvalSummary = receiptApprovalSummary(liquidation);
+  const overallApproval = liqApprovalStatus(liquidation);
+  const canSubmitFinal = approvalSummary.total > 0 && approvalSummary.allApproved;
+
+  const approveReceipt = (a) => onDecideReceipt && onDecideReceipt(disbursement.id, a.id, "Approved", "");
+  const rejectReceipt = (a) => {
+    if (!onDecideReceipt) return;
+    const remarks = window.prompt(`Reason for rejecting "${a.name}" (required):`, "");
+    if (remarks == null) return;
+    if (!remarks.trim()) { window.alert("Rejection remarks are required."); return; }
+    onDecideReceipt(disbursement.id, a.id, "Rejected", remarks.trim());
+  };
 
   const handleSave = () => {
     onSave(disbursement.id, validLines.map((l) => ({ ...l, amount: Number(l.amount) })), attachments);
@@ -93,6 +111,26 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
           <div className="pcp-kpi-value pcp-num" style={{ color: remaining < 0 ? "var(--brand)" : "var(--green)" }}>
             {peso(Math.abs(remaining))}
           </div>
+        </div>
+      </div>
+
+      {/* Automated computation + receipt-approval gate. Totals are computed
+          automatically from the encoded receipt lines and cannot be edited. */}
+      <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16, background: "var(--paper)" }}>
+        <div className="pcp-section-title" style={{ margin: "0 0 10px" }}>Automated Computation &amp; Receipt Approval</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 18, fontSize: 12.5 }}>
+          <div><div className="pcp-kpi-label">Total Amount of Receipts</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(total)} <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>({validLines.length} line{validLines.length === 1 ? "" : "s"})</span></div></div>
+          <div><div className="pcp-kpi-label">Receipts Approved</div><div className="pcp-num" style={{ fontWeight: 700 }}>{approvalSummary.approved} / {approvalSummary.total}</div></div>
+          <div><div className="pcp-kpi-label">Reimbursable Amount</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(total)}</div></div>
+          <div><div className="pcp-kpi-label">Remaining Balance</div><div className="pcp-num" style={{ fontWeight: 700, color: remaining < 0 ? "var(--brand)" : "var(--green)" }}>{peso(Math.abs(remaining))}{remaining < 0 ? " (owed to employee)" : ""}</div></div>
+        </div>
+        <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 8, fontSize: 12,
+          background: overallApproval === "For Revision" ? "var(--red-bg)" : (canSubmitFinal ? "var(--green-bg)" : "var(--amber-bg)"),
+          color: overallApproval === "For Revision" ? "var(--brand-dark)" : (canSubmitFinal ? "var(--green)" : "var(--amber)") }}>
+          {approvalSummary.total === 0 && <>Upload each Official Receipt / Sales Invoice above. Every receipt must be approved by Grace Gan before the liquidation can be submitted.</>}
+          {approvalSummary.total > 0 && overallApproval === "For Revision" && <><AlertTriangle size={13} style={{ verticalAlign: "-2px" }} /> <strong>For Revision</strong> — {approvalSummary.rejected} receipt(s) were rejected. Replace or correct only the rejected receipt(s), then re-save.</>}
+          {approvalSummary.total > 0 && overallApproval === "Pending Approval" && <><strong>Pending Approval</strong> — {approvalSummary.pending} receipt(s) awaiting Grace Gan's approval. Final liquidation cannot be submitted yet.</>}
+          {canSubmitFinal && <><Check size={13} style={{ verticalAlign: "-2px" }} /> <strong>All receipts approved</strong> — this liquidation is ready for final submission.</>}
         </div>
       </div>
 
@@ -150,19 +188,47 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
 
         {attachments.length ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {attachments.map((a) => (
-              <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--line)", borderRadius: 8, padding: "8px 11px" }}>
-                <FileText size={15} color="#2054a3" style={{ flexShrink: 0 }} />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
-                  <div style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
-                    {(a.size / 1024).toFixed(0)} KB · uploaded {fmtDate(a.uploadedAt)}
+            {attachments.map((a) => {
+              const pa = persistedById(a.id);
+              const status = (pa && pa.approvalStatus) || a.approvalStatus || "Pending";
+              const history = (pa && pa.approvalHistory) || a.approvalHistory || [];
+              const isSaved = !!pa;
+              return (
+              <div key={a.id} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "8px 11px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <FileText size={15} color="#2054a3" style={{ flexShrink: 0 }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
+                    <div style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
+                      {(a.size / 1024).toFixed(0)} KB · uploaded {fmtDate(a.uploadedAt)}
+                    </div>
                   </div>
+                  <Badge status={status} />
+                  <a className="pcp-btn pcp-btn-sm" href={a.data} target="_blank" rel="noopener noreferrer" title="Preview receipt">View</a>
+                  {canApproveReceipts && isSaved && (
+                    <>
+                      <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => approveReceipt(a)} disabled={status === "Approved"} title="Approve receipt"><Check size={12} /></button>
+                      <button className="pcp-btn pcp-btn-sm pcp-btn-danger" onClick={() => rejectReceipt(a)} disabled={status === "Rejected"} title="Reject receipt"><X size={12} /></button>
+                    </>
+                  )}
+                  <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => removeAttachment(a.id)} title="Remove"><Trash2 size={13} color="var(--brand)" /></button>
                 </div>
-                <a className="pcp-btn pcp-btn-sm" href={a.data} target="_blank" rel="noopener noreferrer" title="View / download">View</a>
-                <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => removeAttachment(a.id)} title="Remove"><Trash2 size={13} color="var(--brand)" /></button>
+                {canApproveReceipts && !isSaved && (
+                  <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 5 }}>Save the liquidation to enable approval of this receipt.</div>
+                )}
+                {history.length > 0 && (
+                  <div style={{ marginTop: 7, borderTop: "1px dashed var(--line)", paddingTop: 6 }}>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-mut)", marginBottom: 3 }}>Approval History</div>
+                    {history.map((h, i) => (
+                      <div key={i} style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
+                        <strong style={{ color: h.status === "Rejected" ? "var(--brand)" : "var(--green)" }}>{h.status}</strong> by {h.approver} · {h.ts.replace("T", " ")}{h.remarks ? ` · "${h.remarks}"` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div style={{ fontSize: 12, color: "var(--text-mut)", padding: "10px 0" }}>
@@ -180,7 +246,7 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport }) {
   );
 }
 
-function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions, plantTitle }) {
+function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions, plantTitle, canApproveReceipts, onDecideReceipt }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [plant, setPlant] = useState("ALL");
@@ -233,6 +299,8 @@ function LiquidationTab({ disbursements, liquidations, onSaveLiquidation, onExpo
               liquidation={liquidationFor(selected.id, liquidations)}
               onSave={onSaveLiquidation}
               onExport={onExport}
+              canApproveReceipts={canApproveReceipts}
+              onDecideReceipt={onDecideReceipt}
             />
           ) : (
             <div className="pcp-card pcp-card-pad"><div className="pcp-empty">Select a voucher to begin liquidation</div></div>

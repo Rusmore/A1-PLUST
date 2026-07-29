@@ -60,9 +60,10 @@
      Create these SAME accounts (email + password) in Supabase > Authentication
      > Users. To reset a password, use the Supabase dashboard; each user can also
      change their own password from the app sidebar. */
-  window.PCP_ADMIN_EMAILS = ["accounting@a1plus.com"];   // full super access
+  window.PCP_ADMIN_EMAILS = ["accounting@a1plus.com", "a1plusadmin@a1plus.com"];   // full super access
   window.PCP_DEFAULT_ROLE = "Custodian";                 // fallback for unlisted signed-in users
   window.PCP_USERS = {
+    "a1plusadmin@a1plus.com": { name: "Grace Gan",             role: "SuperAdmin", plants: "ALL" },
     "accounting@a1plus.com": { name: "Accounting Department", role: "Accounting", plants: "ALL" },
     "finance@a1plus.com":    { name: "Finance Department",    role: "Finance",    plants: "ALL" },
     "puradr@a1plus.com":     { name: "Pura Barloso",          role: "Custodian",  plants: ["D1", "RG"] },
@@ -177,7 +178,7 @@
      browsers reload the fragments. The order of PCP_SRC_FILES matters and
      must not be rearranged (later files rely on earlier definitions). -->
 <script>
-  window.PCP_SRC_VERSION = "20260727b";
+  window.PCP_SRC_VERSION = "20260729a";
   window.PCP_SRC_FILES = [
     "src/01-imports.jsx",
     "src/02-helpers.jsx",

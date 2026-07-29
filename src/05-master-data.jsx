@@ -752,6 +752,7 @@ const taxCategoryLabel = (code) => {
 /* Each role only sees the nav tabs relevant to it. Plant-level data access is
    controlled separately (per user) so a custodian only sees their own plants. */
 const ROLES = {
+  "SuperAdmin": { label: "System Administrator", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
   "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
   "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata"] },
   "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents"] },
@@ -771,7 +772,7 @@ function resolveUserAccess(email) {
   const u = users[e] || users[username];
   if (u) {
     const role = ROLES[u.role] ? u.role : "Custodian";
-    const isAdmin = role === "Accounting" || admins.includes(e) || admins.includes(username);
+    const isAdmin = role === "Accounting" || role === "SuperAdmin" || admins.includes(e) || admins.includes(username);
     return { role, isAdmin, plants: u.plants || "ALL", name: u.name || email };
   }
   if (admins.includes(e) || admins.includes(username)) return { role: "Accounting", isAdmin: true, plants: "ALL", name: email };
@@ -923,6 +924,62 @@ const EXPENSE_CATEGORIES = [
   "OE Toll Fee",
   "OE Transaction Loss",
   "OE Transportation and travel"
+];
+
+/* ============================= ALLOWABLE PURPOSES ============================= */
+/* Predefined allowable business expenses for the PCF Request "Purpose" field.
+   Free-text is not permitted except when "Others" is selected, which then
+   requires a mandatory justification (captured in request.purposeJustification).
+   The special OTHERS_PURPOSE value is treated as the "Others" option. */
+const OTHERS_PURPOSE = "Others";
+const ALLOWABLE_PURPOSES = [
+  "FOH Communication, Light & Water",
+  "FOH Delivery Expense",
+  "FOH Delivery Expense-Transpo",
+  "FOH Freight In Charges",
+  "FOH Insurance",
+  "FOH Miscellaneous",
+  "FOH Oil & Gasoline",
+  "FOH Other Charges",
+  "FOH Production Tools",
+  "FOH Rep & Main. - Bldg. Equipment",
+  "FOH Rep & Main. - Building",
+  "FOH Rep & Main. - Delivery Truck",
+  "FOH Rep & Main. - Fire Truck",
+  "FOH Rep & Main. - Inventory Discrepancy",
+  "FOH Rep & Main. - Machineries",
+  "FOH Rep & Main. - Motorcycle Services",
+  "FOH Rep & Main. - Prod Equipment",
+  "FOH Toll Fee",
+  "FOH Trucking",
+  "OE - Feeds",
+  "OE Advertising and Promotion",
+  "OE Bank Service Charges",
+  "OE Commission Expense",
+  "OE Communication, Light & Water",
+  "OE Courier Services",
+  "OE Documentary Stamp Tax",
+  "OE Documentation, Registration",
+  "OE Employee's Benefit",
+  "OE Janitorial Expense",
+  "OE Meal Allowance",
+  "OE Miscellaneous",
+  "OE Office Supplies",
+  "OE Oil & Gasoline",
+  "OE Other Charges",
+  "OE Printing, Supplies & Office",
+  "OE Rep. & Main - Building",
+  "OE Rep. & Main - Company Car",
+  "OE Rep. & Main - Land Improvement",
+  "OE Rep. & Main - Office Equipment",
+  "OE Rep. & Main - Residential & Leisure",
+  "OE Representation and Entertainment",
+  "OE Samples",
+  "OE Seminars and Training Fee",
+  "OE Taxes and Licenses",
+  "OE Testing Fee",
+  "OE Toll Fee",
+  "OE Transportation and travel",
 ];
 
 const EXPENSE_CATEGORY_ACCOUNTS = {

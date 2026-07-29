@@ -122,6 +122,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     setRequests((rs) => [...rs, {
       id: uid("req"), requestNo: form.requestNo, date: form.date, employee: form.employee,
       department: form.department, branchCode: form.branchCode, purpose: form.purpose,
+      purposeJustification: form.purposeJustification || "",
       amount: Number(form.amount), approver: form.approver, status: "Pending",
     }]);
     logAudit("Request Created", form.requestNo, `${form.employee} · ${peso(Number(form.amount))} · ${form.purpose}`);
@@ -130,7 +131,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const editRequest = useCallback((id, form) => {
     setRequests((rs) => rs.map((r) => (r.id === id ? {
       ...r, date: form.date, employee: form.employee, department: form.department,
-      branchCode: form.branchCode, purpose: form.purpose, amount: Number(form.amount),
+      branchCode: form.branchCode, purpose: form.purpose,
+      purposeJustification: form.purposeJustification || "", amount: Number(form.amount),
       approver: form.approver,
     } : r)));
     const r = requests.find((x) => x.id === id);
@@ -156,6 +158,21 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const confirmDisburse = useCallback((extra) => {
     const req = disburseTarget;
     if (!req) return;
+    /* Policy: no new advance may be released while the employee still has an
+       unliquidated (not fully liquidated) advance. */
+    const outstanding = disbursements.filter(
+      (d) => d.employee === req.employee && liqStatusFor(d, liquidations) !== "Fully Liquidated"
+    );
+    if (outstanding.length) {
+      const vouchers = outstanding.map((d) => d.voucherNo).join(", ");
+      window.alert(
+        `Cannot release a new advance to ${req.employee}.\n\n` +
+        `This employee has an unliquidated advance (${vouchers}). ` +
+        `Per policy, the previous advance must be fully liquidated before a new one is released.`
+      );
+      logAudit("Release Blocked", req.requestNo, `${req.employee} has unliquidated advance(s): ${vouchers}`);
+      return;
+    }
     setDisbursements((ds) => [...ds, {
       id: uid("dv"), voucherNo: nextVoucherNo, date: extra.date, requestId: req.id,
       employee: req.employee, branchCode: req.branchCode, department: req.department,
@@ -165,7 +182,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     setRequests((rs) => rs.map((r) => (r.id === req.id ? { ...r, status: "Disbursed" } : r)));
     logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`);
     setDisburseTarget(null);
-  }, [disburseTarget, nextVoucherNo, logAudit]);
+  }, [disburseTarget, nextVoucherNo, logAudit, disbursements, liquidations]);
 
   const updateRemarks = useCallback((id, remarks) => {
     setDisbursements((ds) => ds.map((d) => (d.id === id ? { ...d, remarks } : d)));
@@ -192,6 +209,34 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
     logAudit("Liquidated", d ? d.voucherNo : disbursementId, `${lines.length} receipt line(s) · ${peso(total)}${atts.length ? ` · ${atts.length} document(s)` : ""}`);
   }, [logAudit, disbursements]);
+
+  /* ---- Receipt approval (per uploaded Official Receipt / Sales Invoice) ----
+     Approver is Grace Gan (super admin). Each decision is stamped into the
+     receipt's own approval history and recorded in the audit trail. */
+  const decideReceipt = useCallback((disbursementId, attachmentId, decision, remarks) => {
+    const ts = new Date().toISOString().slice(0, 19);
+    const approver = userName || role;
+    let receiptName = attachmentId;
+    setLiquidations((ls) => ls.map((l) => {
+      if (l.disbursementId !== disbursementId) return l;
+      const attachments = (l.attachments || []).map((a) => {
+        if (a.id !== attachmentId) return a;
+        receiptName = a.name || attachmentId;
+        return {
+          ...a,
+          approvalStatus: decision,
+          approvalHistory: [...(a.approvalHistory || []), { approver, ts, status: decision, remarks: remarks || "" }],
+        };
+      });
+      return { ...l, attachments };
+    }));
+    const d = disbursements.find((x) => x.id === disbursementId);
+    logAudit(
+      decision === "Approved" ? "Receipt Approved" : "Receipt Rejected",
+      d ? d.voucherNo : disbursementId,
+      `${receiptName}${remarks ? ` · ${remarks}` : ""}`
+    );
+  }, [logAudit, disbursements, userName, role]);
 
   /* ---- Replenishment ---- */
   const addReplenishment = useCallback((form) => {
@@ -495,6 +540,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             disbursements={scopedDisbursements} liquidations={scopedLiquidations}
             onSaveLiquidation={saveLiquidation} onExport={exportLiquidation}
             onExportAll={exportAllToAcumatica}
+            onDecideReceipt={decideReceipt}
+            canApproveReceipts={!!isAdmin}
             plantOptions={scopedPlantOptions}
             plantTitle={activePlantLabel}
           />

@@ -99,6 +99,36 @@ function liqStatusFor(disb, liquidations) {
   return "Over-Liquidated";
 }
 
+/* ---- Receipt (Official Receipt / Sales Invoice) approval helpers ----
+   Every uploaded receipt carries its own approvalStatus (Pending/Approved/
+   Rejected). These derive the roll-up used to gate final liquidation submission
+   and to drive dashboard widgets. */
+function receiptApprovalSummary(liq) {
+  const atts = (liq && liq.attachments) || [];
+  let approved = 0, rejected = 0, pending = 0;
+  atts.forEach((a) => {
+    const s = a.approvalStatus || "Pending";
+    if (s === "Approved") approved++;
+    else if (s === "Rejected") rejected++;
+    else pending++;
+  });
+  const total = atts.length;
+  return {
+    total, approved, rejected, pending,
+    allApproved: total > 0 && approved === total,
+    anyRejected: rejected > 0,
+  };
+}
+
+/* Overall approval state of a liquidation's receipts. */
+function liqApprovalStatus(liq) {
+  const s = receiptApprovalSummary(liq);
+  if (s.total === 0) return "No Receipts";
+  if (s.anyRejected) return "For Revision";
+  if (s.allApproved) return "Receipts Approved";
+  return "Pending Approval";
+}
+
 function computeMetrics(funds, requests, disbursements, liquidations, replenishments) {
   const reps = replenishments || [];
   const totalFund = funds.reduce((s, f) => s + (Number(f.beginningBalance) || 0), 0);

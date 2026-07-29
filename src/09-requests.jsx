@@ -8,15 +8,18 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
       ? {
           date: request.date, employee: request.employee, department: request.department,
           branchCode: request.branchCode, purpose: request.purpose,
+          purposeJustification: request.purposeJustification || "",
           amount: request.amount, approver: request.approver || "",
         }
       : {
           date: todayISO(), employee: "", department: SUBACCOUNTS[1].code,
-          branchCode: defaultBranch, purpose: "", amount: "", approver: "",
+          branchCode: defaultBranch, purpose: "", purposeJustification: "", amount: "", approver: "",
         }
   );
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const valid = form.employee.trim() && form.purpose.trim() && Number(form.amount) > 0 && form.approver.trim();
+  const isOthers = form.purpose === OTHERS_PURPOSE;
+  const validPurpose = !!form.purpose && (!isOthers || form.purposeJustification.trim());
+  const valid = form.employee.trim() && validPurpose && Number(form.amount) > 0 && form.approver.trim();
 
   return (
     <div className="pcp-modal-backdrop" onClick={onClose}>
@@ -70,8 +73,24 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
           </div>
           <div className="pcp-field">
             <label>Purpose</label>
-            <textarea className="pcp-input" rows={2} placeholder="What is this cash advance for?" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} />
+            <select className="pcp-select" value={form.purpose} onChange={(e) => set("purpose", e.target.value)}>
+              <option value="">— Select an allowable purpose —</option>
+              {ALLOWABLE_PURPOSES.map((p) => <option key={p} value={p}>{p}</option>)}
+              <option value={OTHERS_PURPOSE}>{OTHERS_PURPOSE} (requires justification)</option>
+            </select>
           </div>
+          {isOthers && (
+            <div className="pcp-field">
+              <label>Justification for "Others" <span style={{ color: "var(--brand)" }}>*</span></label>
+              <textarea
+                className="pcp-input"
+                rows={2}
+                placeholder="Provide a mandatory justification for this expense (reviewed by Finance)."
+                value={form.purposeJustification}
+                onChange={(e) => set("purposeJustification", e.target.value)}
+              />
+            </div>
+          )}
           <div className="pcp-field">
             <label>Amount Requested (₱)</label>
             <input type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00" value={form.amount} onChange={(e) => set("amount", e.target.value)} />
@@ -142,7 +161,11 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
                     <td>{r.employee}</td>
                     <td title={subaccountLabel(r.department)}>{subaccountLabel(r.department)}</td>
                     <td>{plantLabel(r.branchCode)}</td>
-                    <td style={{ maxWidth: 220, whiteSpace: "normal" }}>{r.purpose}</td>
+                    <td style={{ maxWidth: 220, whiteSpace: "normal" }}>
+                      {r.purpose === OTHERS_PURPOSE && r.purposeJustification
+                        ? <span title={r.purposeJustification}>{OTHERS_PURPOSE}: {r.purposeJustification}</span>
+                        : r.purpose}
+                    </td>
                     <td className="pcp-num">{peso(r.amount)}</td>
                     <td>{r.approver || "—"}</td>
                     <td><Badge status={r.status} /></td>
