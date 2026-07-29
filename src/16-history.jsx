@@ -31,7 +31,7 @@ function buildTransactionFeed(requests, disbursements, liquidations, replenishme
   return rows.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 }
 
-function TransactionHistoryTab({ requests, disbursements, liquidations, replenishments, initialFilter, plantOptions }) {
+function TransactionHistoryTab({ requests, disbursements, liquidations, replenishments, initialFilter, plantOptions, plantTitle }) {
   const [type, setType] = useState("All");
   const [company, setCompany] = useState("All");
   const [status, setStatus] = useState("All");
