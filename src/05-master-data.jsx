@@ -804,6 +804,15 @@ function buildNotifications(requests, disbursements, liquidations, replenishment
     else
       out.push({ id: "n-liq-" + d.id, type: "liquidation", icon: "sheet", title: `${kind} liquidation pending`, text: `${who} · ${peso(d.amount)}`, date: d.date });
   });
+  /* Receipts returned for correction — notify the requester to upload corrected
+     documents before the liquidation can be resubmitted. */
+  (liquidations || []).forEach((l) => {
+    if (liqApprovalStatus(l) !== "For Revision") return;
+    const d = disbursements.find((x) => x.id === l.disbursementId);
+    if (!d) return;
+    const rejected = (l.attachments || []).filter((a) => (a.approvalStatus || "Pending") === "Rejected").length;
+    out.push({ id: "n-liqrev-" + l.id, type: "liquidation", icon: "alert", title: "Receipts returned for correction", text: `${d.voucherNo} · ${d.employee} · ${rejected} receipt(s) rejected — upload corrected documents`, date: d.date });
+  });
   (replenishments || []).forEach((r) => {
     if (r.status === "Completed") out.push({ id: "n-rep-" + r.id, type: "replenished", icon: "refresh", title: "Replenishment completed", text: `${r.replenishmentNo} · ${peso(r.amount)}`, date: r.date });
     else out.push({ id: "n-repp-" + r.id, type: "replenish-pending", icon: "refresh", title: "Replenishment pending", text: `${r.replenishmentNo} · ${peso(r.amount)}`, date: r.date });

@@ -1,5 +1,22 @@
 /* ============================= LIQUIDATION ============================= */
 
+/* Only this named approver (Ma'am Grace Gan) may review and approve liquidation
+   receipts before they are processed. */
+const RECEIPT_APPROVER_NAME = "Grace Gan";
+
+/* Cash settlement classification derived from the variance between the cash
+   released (advance) and the total liquidated expenses. Mirrors common petty
+   cash voucher practice: a positive difference means unused cash is returned,
+   a negative difference means the employee is reimbursed the shortfall. */
+function cashSettlement(cashReleased, totalLiquidated) {
+  const difference = Math.round((cashReleased - totalLiquidated) * 100) / 100;
+  let type;
+  if (difference > 0) type = "excess";        // released more than spent → return cash
+  else if (difference < 0) type = "reimburse"; // spent more than released → reimburse employee
+  else type = "exact";
+  return { difference, type };
+}
+
 function emptyLine() {
   return { id: uid("ln"), date: todayISO(), expense: "", category: EXPENSE_CATEGORIES[0], department: SUBACCOUNTS[1].code, amount: "", taxCategory: "" };
 }
@@ -55,6 +72,11 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
   const remaining = disbursement.amount - total;
   const validLines = lines.filter((l) => l.expense.trim() && Number(l.amount) > 0);
 
+  /* Auto-computed cash settlement — the settlement type is derived, never
+     hand-picked, so it always matches the variance between the released cash
+     and the liquidated expenses. */
+  const settlement = cashSettlement(disbursement.amount, total);
+
   /* Receipt approval state is read from the PERSISTED liquidation so that
      Grace Gan's decisions (saved immediately) are reflected here regardless of
      unsaved worksheet edits. */
@@ -70,6 +92,15 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
     if (remarks == null) return;
     if (!remarks.trim()) { window.alert("Rejection remarks are required."); return; }
     onDecideReceipt(disbursement.id, a.id, "Rejected", remarks.trim());
+  };
+  /* Approve every still-pending, already-saved receipt in one action. */
+  const approveAllReceipts = () => {
+    if (!onDecideReceipt) return;
+    ((liquidation && liquidation.attachments) || []).forEach((a) => {
+      if ((a.approvalStatus || "Pending") !== "Approved") {
+        onDecideReceipt(disbursement.id, a.id, "Approved", "");
+      }
+    });
   };
 
   const handleSave = () => {
@@ -127,10 +158,47 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
         <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 8, fontSize: 12,
           background: overallApproval === "For Revision" ? "var(--red-bg)" : (canSubmitFinal ? "var(--green-bg)" : "var(--amber-bg)"),
           color: overallApproval === "For Revision" ? "var(--brand-dark)" : (canSubmitFinal ? "var(--green)" : "var(--amber)") }}>
-          {approvalSummary.total === 0 && <>Upload each Official Receipt / Sales Invoice above. Every receipt must be approved by Grace Gan before the liquidation can be submitted.</>}
+          {approvalSummary.total === 0 && <>Upload each Official Receipt / Sales Invoice above. Every receipt must be reviewed and approved by {RECEIPT_APPROVER_NAME} before the liquidation can be submitted.</>}
           {approvalSummary.total > 0 && overallApproval === "For Revision" && <><AlertTriangle size={13} style={{ verticalAlign: "-2px" }} /> <strong>For Revision</strong> — {approvalSummary.rejected} receipt(s) were rejected. Replace or correct only the rejected receipt(s), then re-save.</>}
-          {approvalSummary.total > 0 && overallApproval === "Pending Approval" && <><strong>Pending Approval</strong> — {approvalSummary.pending} receipt(s) awaiting Grace Gan's approval. Final liquidation cannot be submitted yet.</>}
+          {approvalSummary.total > 0 && overallApproval === "Pending Approval" && <><strong>Pending Approval</strong> — {approvalSummary.pending} receipt(s) awaiting {RECEIPT_APPROVER_NAME}'s approval. Final liquidation cannot be submitted yet.</>}
           {canSubmitFinal && <><Check size={13} style={{ verticalAlign: "-2px" }} /> <strong>All receipts approved</strong> — this liquidation is ready for final submission.</>}
+        </div>
+      </div>
+
+      {/* Cash Settlement — auto-classified from the variance between cash
+          released and total liquidated expenses. The selected option is derived
+          automatically and cannot be hand-picked. */}
+      <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16, background: "var(--paper)" }}>
+        <div className="pcp-section-title" style={{ margin: "0 0 10px" }}>Cash Settlement</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 18, fontSize: 12.5, marginBottom: 12 }}>
+          <div><div className="pcp-kpi-label">Cash Released (PCF)</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(disbursement.amount)}</div></div>
+          <div><div className="pcp-kpi-label">Total Liquidated Expenses</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(total)}</div></div>
+          <div><div className="pcp-kpi-label">Difference</div><div className="pcp-num" style={{ fontWeight: 700, color: settlement.type === "reimburse" ? "var(--brand)" : settlement.type === "excess" ? "var(--green)" : "var(--text)" }}>{settlement.difference < 0 ? "-" : ""}{peso(Math.abs(settlement.difference))}</div></div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[
+            { key: "excess", label: "Excess Cash Returned", desc: "Employee returned the unused cash to the PCF Custodian." },
+            { key: "reimburse", label: "Additional Reimbursement Required", desc: "Actual expenses exceeded the cash released and require reimbursement." },
+            { key: "exact", label: "Exact Amount", desc: "No excess cash returned and no reimbursement required." },
+          ].map((opt) => {
+            const active = settlement.type === opt.key;
+            return (
+              <label key={opt.key} style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "9px 11px", borderRadius: 8,
+                border: "1px solid " + (active ? "var(--brand)" : "var(--line)"),
+                background: active ? "var(--red-bg)" : "transparent", cursor: "default" }}>
+                <input type="checkbox" checked={active} readOnly style={{ marginTop: 2, pointerEvents: "none" }} />
+                <span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: active ? "var(--brand-dark)" : "var(--text)" }}>{opt.label}</span>
+                  <span style={{ display: "block", fontSize: 11, color: "var(--text-mut)", marginTop: 1 }}>{opt.desc}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--text-mut)" }}>
+          {settlement.type === "excess" && <>Employee must return <strong>{peso(settlement.difference)}</strong> in unused cash to the PCF Custodian.</>}
+          {settlement.type === "reimburse" && <>Employee is owed an additional reimbursement of <strong>{peso(Math.abs(settlement.difference))}</strong>.</>}
+          {settlement.type === "exact" && <>Cash released matches the liquidated expenses exactly — no settlement required.</>}
         </div>
       </div>
 
@@ -168,16 +236,23 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
               ({attachments.length}) — official receipts, sales invoices, etc.
             </span>
           </div>
-          <label className="pcp-btn pcp-btn-sm" style={{ cursor: "pointer", margin: 0 }}>
-            <Download size={12} style={{ transform: "rotate(180deg)" }} /> Upload
-            <input
-              type="file"
-              multiple
-              accept="image/*,application/pdf"
-              style={{ display: "none" }}
-              onChange={(e) => { onPickFiles(e.target.files); e.target.value = ""; }}
-            />
-          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {canApproveReceipts && approvalSummary.total > 0 && approvalSummary.pending > 0 && (
+              <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={approveAllReceipts} title={`Approve all pending receipts as ${RECEIPT_APPROVER_NAME}`}>
+                <Check size={12} /> Approve All ({approvalSummary.pending})
+              </button>
+            )}
+            <label className="pcp-btn pcp-btn-sm" style={{ cursor: "pointer", margin: 0 }}>
+              <Download size={12} style={{ transform: "rotate(180deg)" }} /> Upload
+              <input
+                type="file"
+                multiple
+                accept="image/*,application/pdf"
+                style={{ display: "none" }}
+                onChange={(e) => { onPickFiles(e.target.files); e.target.value = ""; }}
+              />
+            </label>
+          </div>
         </div>
 
         {uploadNote && (
@@ -187,12 +262,14 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
         )}
 
         {attachments.length ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {attachments.map((a) => {
               const pa = persistedById(a.id);
               const status = (pa && pa.approvalStatus) || a.approvalStatus || "Pending";
               const history = (pa && pa.approvalHistory) || a.approvalHistory || [];
               const isSaved = !!pa;
+              const isImage = (a.type || "").startsWith("image");
+              const isPdf = (a.type || "").includes("pdf");
               return (
               <div key={a.id} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "8px 11px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -200,11 +277,12 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</div>
                     <div style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
-                      {(a.size / 1024).toFixed(0)} KB · uploaded {fmtDate(a.uploadedAt)}
+                      {(a.size / 1024).toFixed(0)} KB · {(a.type || "file")} · uploaded {fmtDate(a.uploadedAt)}
                     </div>
                   </div>
                   <Badge status={status} />
-                  <a className="pcp-btn pcp-btn-sm" href={a.data} target="_blank" rel="noopener noreferrer" title="Preview receipt">View</a>
+                  <a className="pcp-btn pcp-btn-sm" href={a.data} target="_blank" rel="noopener noreferrer" title="Open full size / zoom"><Search size={12} /> Zoom</a>
+                  <a className="pcp-btn pcp-btn-sm" href={a.data} download={a.name} title="Download receipt"><Download size={12} /></a>
                   {canApproveReceipts && isSaved && (
                     <>
                       <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => approveReceipt(a)} disabled={status === "Approved"} title="Approve receipt"><Check size={12} /></button>
@@ -213,6 +291,21 @@ function LiquidationWorksheet({ disbursement, liquidation, onSave, onExport, can
                   )}
                   <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => removeAttachment(a.id)} title="Remove"><Trash2 size={13} color="var(--brand)" /></button>
                 </div>
+
+                {/* Inline preview — the receipt is visible directly on the page,
+                    no "View" click needed (mirrors the reimbursement module). */}
+                <div style={{ marginTop: 8, border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden", background: "#f4f6f9" }}>
+                  {isImage ? (
+                    <img src={a.data} alt={a.name} style={{ display: "block", width: "100%", maxHeight: 320, objectFit: "contain" }} />
+                  ) : isPdf ? (
+                    <iframe title={a.name} src={a.data} style={{ width: "100%", height: 320, border: "none" }} />
+                  ) : (
+                    <div style={{ padding: 24, textAlign: "center", fontSize: 11.5, color: "var(--text-mut)" }}>
+                      Preview not available for this file type — use Zoom or Download to open it.
+                    </div>
+                  )}
+                </div>
+
                 {canApproveReceipts && !isSaved && (
                   <div style={{ fontSize: 10.5, color: "var(--amber)", marginTop: 5 }}>Save the liquidation to enable approval of this receipt.</div>
                 )}
