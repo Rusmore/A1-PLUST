@@ -132,7 +132,7 @@ const SORT_FIELDS = {
   branchCode: (d) => d.branchCode, amount: (d) => d.amount,
 };
 
-function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions, plantTitle }) {
+function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions, plantTitle, canDelete, onDelete }) {
   const [search, setSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -258,7 +258,14 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
                       )}
                     </td>
                     <td>
-                      <button className="pcp-btn pcp-btn-sm" onClick={() => setEditDisb(d)} title="Edit disbursement"><Edit3 size={12} /></button>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="pcp-btn pcp-btn-sm" onClick={() => setEditDisb(d)} title="Edit disbursement"><Edit3 size={12} /></button>
+                        {canDelete && onDelete && (
+                          <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => onDelete(d.id)} title="Delete voucher and its liquidation (super admin)">
+                            <Trash2 size={13} color="var(--brand)" />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )) : <tr><td colSpan={12} className="pcp-empty">No disbursements match your filters</td></tr>}

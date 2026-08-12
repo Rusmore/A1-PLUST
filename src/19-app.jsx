@@ -48,6 +48,13 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   /* Whoever is signed in has full edit/approve/release rights within their scope. */
   const canEdit = true, canApprove = true, canRelease = true;
 
+  /* ---- Delete rights ----
+     Deleting records is reserved for the SuperAdmin role (window.PCP_USERS in
+     index.html) — Accounting and Finance cannot delete. Gated on BOTH the user's
+     assigned role and the role currently being viewed, so an admin using
+     "view as Custodian" sees an honest preview with the delete actions hidden. */
+  const isSuperAdmin = (userRole || "") === "SuperAdmin" && role === "SuperAdmin";
+
   /* Append an entry to the immutable audit trail, tagged with the signed-in user. */
   const logAudit = useCallback((action, entity, remarks) => {
     setAuditLog((log) => [...log, {
@@ -196,19 +203,134 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     setDisbursements((ds) => ds.map((d) => (d.id === id ? { ...d, billed: !d.billed } : d)));
   }, []);
 
-  /* ---- Liquidation ---- */
-  const saveLiquidation = useCallback((disbursementId, lines, attachments) => {
-    const atts = attachments || [];
+  /* ---- Liquidation ----
+     Receipt amounts live on each supporting document. Every change to one is
+     stamped into that document's own amountHistory (previous amount, new
+     amount, who changed it, when, and why) as well as the global audit trail,
+     so a receipt can be audited independently of the liquidation header. */
+  const saveLiquidation = useCallback((disbursementId, lines, attachments, opts) => {
+    const o = opts || {};
+    const ts = new Date().toISOString().slice(0, 19);
+    const actor = userName || role;
+    const prevLiq = liquidations.find((l) => l.disbursementId === disbursementId) || null;
+    const prevById = {};
+    ((prevLiq && prevLiq.attachments) || []).forEach((a) => { prevById[a.id] = a; });
+
+    const changes = [];
+    const atts = (attachments || []).map((a) => {
+      const prev = prevById[a.id];
+      const amount = round2(a.receiptAmount);
+      const carried = (prev && prev.amountHistory) || a.amountHistory || [];
+      /* Approval state is authoritative on the STORED record — an approval made
+         while the worksheet had unsaved edits must not be clobbered. */
+      const base = {
+        ...a,
+        receiptAmount: amount,
+        approvalStatus: prev ? (prev.approvalStatus || "Pending") : (a.approvalStatus || "Pending"),
+        approvalHistory: prev ? (prev.approvalHistory || []) : (a.approvalHistory || []),
+      };
+      const prevAmount = prev ? round2(prev.receiptAmount) : null;
+      if (prev && prevAmount !== amount) {
+        const entry = { prevAmount, newAmount: amount, user: actor, ts, reason: o.reason || "" };
+        changes.push({ name: a.name, ...entry });
+        return { ...base, amountHistory: [...carried, entry] };
+      }
+      if (!prev && amount > 0) {
+        return { ...base, amountHistory: [...carried, { prevAmount: null, newAmount: amount, user: actor, ts, reason: o.reason || "Initial amount" }] };
+      }
+      return { ...base, amountHistory: carried };
+    });
+
     setLiquidations((ls) => {
       const exists = ls.find((l) => l.disbursementId === disbursementId);
       if (exists) return ls.map((l) => (l.disbursementId === disbursementId ? { ...l, lines, attachments: atts } : l));
-      return [...ls, { id: uid("liq"), disbursementId, createdDate: todayISO(), lines, attachments: atts }];
+      return [...ls, { id: uid("liq"), disbursementId, createdDate: todayISO(), lines, attachments: atts, submissionStatus: "Draft" }];
     });
     setDisbursements((ds) => ds.map((d) => (d.id === disbursementId ? { ...d, status: "Closed" } : d)));
     const d = disbursements.find((x) => x.id === disbursementId);
+    const voucher = d ? d.voucherNo : disbursementId;
     const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
-    logAudit("Liquidated", d ? d.voucherNo : disbursementId, `${lines.length} receipt line(s) · ${peso(total)}${atts.length ? ` · ${atts.length} document(s)` : ""}`);
+    const receiptTotal = atts.reduce((s, a) => s + ((a.approvalStatus === "Approved") ? round2(a.receiptAmount) : 0), 0);
+    logAudit("Liquidated", voucher, `${lines.length} receipt line(s) · ${peso(total)}${atts.length ? ` · ${atts.length} document(s) · approved receipts ${peso(receiptTotal)}` : ""}`);
+    changes.forEach((c) => logAudit(
+      "Receipt Amount Changed", voucher,
+      `${c.name}: ${c.prevAmount == null ? "—" : peso(c.prevAmount)} → ${peso(c.newAmount)}${c.reason ? ` · ${c.reason}` : ""}`
+    ));
+  }, [logAudit, disbursements, liquidations, userName, role]);
+
+  /* Submit the final liquidation. Receipt amounts become read-only afterwards
+     for everyone except a receipt approver. */
+  const submitLiquidation = useCallback((disbursementId) => {
+    const ts = new Date().toISOString().slice(0, 19);
+    const actor = userName || role;
+    setLiquidations((ls) => ls.map((l) => (
+      l.disbursementId === disbursementId
+        ? { ...l, submissionStatus: "Submitted", submittedBy: actor, submittedAt: ts }
+        : l
+    )));
+    const d = disbursements.find((x) => x.id === disbursementId);
+    const liq = liquidations.find((l) => l.disbursementId === disbursementId);
+    const sum = receiptAmountSummary(liq);
+    const rec = reconcileReceipts(d ? d.amount : 0, sum.approvedTotal);
+    logAudit("Liquidation Submitted", d ? d.voucherNo : disbursementId,
+      `Total receipts ${peso(sum.approvedTotal)} vs released ${peso(rec.released)}`
+      + (rec.type === "excess" ? ` · refund due ${peso(rec.expected)}` : rec.type === "reimburse" ? ` · reimbursement due ${peso(rec.expected)} · FOR REVIEW` : " · exact"));
+  }, [logAudit, disbursements, liquidations, userName, role]);
+
+  /* Reopen a submitted liquidation for correction (receipt approvers only). */
+  const reopenLiquidation = useCallback((disbursementId, reason) => {
+    setLiquidations((ls) => ls.map((l) => (
+      l.disbursementId === disbursementId ? { ...l, submissionStatus: "Draft" } : l
+    )));
+    const d = disbursements.find((x) => x.id === disbursementId);
+    logAudit("Liquidation Reopened", d ? d.voucherNo : disbursementId, reason || "");
   }, [logAudit, disbursements]);
+
+  /* Record that the refund or reimbursement cash has ACTUALLY changed hands.
+     The actual amount is stored so it can be checked against the expected one. */
+  const recordSettlement = useCallback((disbursementId, payload) => {
+    const ts = new Date().toISOString().slice(0, 19);
+    const actor = userName || role;
+    setLiquidations((ls) => ls.map((l) => {
+      if (l.disbursementId !== disbursementId) return l;
+      const prev = l.settlement || {};
+      return {
+        ...l,
+        settlement: {
+          ...prev,
+          completed: !!payload.completed,
+          type: payload.type,
+          expectedAmount: round2(payload.expectedAmount),
+          actualAmount: round2(payload.actualAmount),
+          recordedBy: payload.completed ? actor : "",
+          recordedAt: payload.completed ? ts : "",
+        },
+      };
+    }));
+    const d = disbursements.find((x) => x.id === disbursementId);
+    const label = payload.type === "excess" ? "excess cash returned" : "reimbursement paid";
+    logAudit(
+      payload.completed ? "Cash Settlement Recorded" : "Cash Settlement Cleared",
+      d ? d.voucherNo : disbursementId,
+      payload.completed
+        ? `${label} · expected ${peso(payload.expectedAmount)} · actual ${peso(payload.actualAmount)}`
+        : "Settlement record cleared"
+    );
+  }, [logAudit, disbursements, userName, role]);
+
+  /* Reviewer sign-off on an over-liquidation. Without this the liquidation can
+     never reach LIQUIDATED, so an excess claim is never auto-approved. */
+  const reviewOverLiquidation = useCallback((disbursementId, remarks) => {
+    const ts = new Date().toISOString().slice(0, 19);
+    const actor = userName || role;
+    setLiquidations((ls) => ls.map((l) => (
+      l.disbursementId === disbursementId
+        ? { ...l, settlement: { ...(l.settlement || {}), reviewedBy: actor, reviewedAt: ts, reviewRemarks: remarks || "" } }
+        : l
+    )));
+    const d = disbursements.find((x) => x.id === disbursementId);
+    logAudit("Over-Liquidation Reviewed", d ? d.voucherNo : disbursementId, remarks || "");
+  }, [logAudit, disbursements, userName, role]);
 
   /* ---- Receipt approval (per uploaded Official Receipt / Sales Invoice) ----
      Approver is Grace Gan (super admin). Each decision is stamped into the
@@ -237,6 +359,87 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       `${receiptName}${remarks ? ` · ${remarks}` : ""}`
     );
   }, [logAudit, disbursements, userName, role]);
+
+  /* ---- Deletion (SuperAdmin only) ----
+     Each delete leaves the surviving records consistent: a voucher takes its
+     liquidation with it and frees the source request, and removing a liquidation
+     reopens its voucher. Every deletion is written to the audit trail. Balances
+     are always derived, never stored, so they re-compute on their own. */
+  const deleteRequest = useCallback((id) => {
+    const r = requests.find((x) => x.id === id);
+    if (!r) return;
+    /* A request that already produced a voucher must be deleted bottom-up, so
+       the ledger never contains a voucher pointing at a missing request. */
+    const linked = disbursements.filter((d) => d.requestId === id);
+    if (linked.length) {
+      window.alert(
+        `"${r.requestNo}" cannot be deleted — cash has already been released against it `
+        + `(${linked.map((d) => d.voucherNo).join(", ")}).\n\n`
+        + "Delete the disbursement voucher first, then delete this request."
+      );
+      return;
+    }
+    if (!window.confirm(`Delete request ${r.requestNo}?\n\n${r.employee} · ${peso(r.amount)} · ${r.purpose}\n\nThis cannot be undone.`)) return;
+    setRequests((rs) => rs.filter((x) => x.id !== id));
+    logAudit("Deleted", r.requestNo, `Request deleted · ${r.employee} · ${peso(r.amount)}`);
+  }, [logAudit, requests, disbursements]);
+
+  const deleteDisbursement = useCallback((id) => {
+    const d = disbursements.find((x) => x.id === id);
+    if (!d) return;
+    const liq = liquidations.find((l) => l.disbursementId === id);
+    const req = requests.find((r) => r.id === d.requestId);
+    let msg = `Delete voucher ${d.voucherNo}?\n\n${d.employee} · ${peso(d.amount)}\n\n`;
+    if (liq) msg += `Its liquidation will also be deleted (${(liq.lines || []).length} expense line(s), ${(liq.attachments || []).length} supporting document(s)).\n`;
+    if (req) msg += `Request ${req.requestNo} will return to "Approved" so it can be released again.\n`;
+    msg += "\nThis cannot be undone.";
+    if (!window.confirm(msg)) return;
+    setDisbursements((ds) => ds.filter((x) => x.id !== id));
+    if (liq) setLiquidations((ls) => ls.filter((l) => l.disbursementId !== id));
+    if (req) setRequests((rs) => rs.map((r) => (r.id === req.id ? { ...r, status: "Approved" } : r)));
+    logAudit("Deleted", d.voucherNo, `Disbursement deleted · ${d.employee} · ${peso(d.amount)}`
+      + (liq ? " · liquidation removed" : "")
+      + (req ? ` · ${req.requestNo} returned to Approved` : ""));
+  }, [logAudit, disbursements, liquidations, requests]);
+
+  const deleteLiquidation = useCallback((disbursementId) => {
+    const liq = liquidations.find((l) => l.disbursementId === disbursementId);
+    if (!liq) return;
+    const d = disbursements.find((x) => x.id === disbursementId);
+    const voucher = d ? d.voucherNo : disbursementId;
+    if (!window.confirm(
+      `Delete the liquidation for ${voucher}?\n\n`
+      + `${(liq.lines || []).length} expense line(s) and ${(liq.attachments || []).length} supporting document(s) `
+      + "will be removed, along with any recorded cash settlement. The voucher returns to the liquidation worklist.\n\n"
+      + "This cannot be undone."
+    )) return;
+    setLiquidations((ls) => ls.filter((l) => l.disbursementId !== disbursementId));
+    setDisbursements((ds) => ds.map((x) => (x.id === disbursementId ? { ...x, status: "Open" } : x)));
+    logAudit("Deleted", voucher, `Liquidation deleted · ${(liq.lines || []).length} line(s) · ${(liq.attachments || []).length} document(s)`);
+  }, [logAudit, liquidations, disbursements]);
+
+  /* Audit entries are deletable by the SuperAdmin. One summary entry replaces
+     what was removed so a deletion is not completely silent — note that the
+     replacement entry can itself be deleted, so the trail is no longer
+     tamper-evident once this is used. */
+  const deleteAuditEntries = useCallback((ids) => {
+    const set = new Set(ids || []);
+    if (!set.size) return;
+    const removed = auditLog.filter((a) => set.has(a.id));
+    if (!removed.length) return;
+    const ts = new Date().toISOString().slice(0, 19);
+    const actor = userName || role;
+    const detail = removed.slice(0, 6).map((a) => `${a.action} · ${a.entity}`).join("; ")
+      + (removed.length > 6 ? ` …and ${removed.length - 6} more` : "");
+    setAuditLog((log) => [
+      ...log.filter((a) => !set.has(a.id)),
+      {
+        id: uid("aud"), ts, user: actor, action: "Audit Entry Deleted",
+        entity: `${removed.length} entr${removed.length === 1 ? "y" : "ies"}`,
+        remarks: detail,
+      },
+    ]);
+  }, [auditLog, userName, role]);
 
   /* ---- Replenishment ---- */
   const addReplenishment = useCallback((form) => {
@@ -523,6 +726,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onDisburse={(req) => setDisburseTarget(req)}
             plantOptions={scopedPlantOptions} canApprove={canApprove} canRelease={canRelease}
             plantTitle={activePlantLabel}
+            canDelete={isSuperAdmin} onDelete={deleteRequest}
           />
         )}
         {activeModule === "disbursements" && (
@@ -532,6 +736,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onUpdateRemarks={updateRemarks} onToggleBilled={toggleBilled} onEditDisbursement={editDisbursement}
             plantOptions={scopedPlantOptions}
             plantTitle={activePlantLabel}
+            canDelete={isSuperAdmin} onDelete={deleteDisbursement}
           />
         )}
         {activeModule === "liquidation" && (
@@ -541,6 +746,11 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onSaveLiquidation={saveLiquidation} onExport={exportLiquidation}
             onExportAll={exportAllToAcumatica}
             onDecideReceipt={decideReceipt}
+            onSubmitLiquidation={submitLiquidation}
+            onReopenLiquidation={reopenLiquidation}
+            onRecordSettlement={recordSettlement}
+            onReviewOverLiquidation={reviewOverLiquidation}
+            canDelete={isSuperAdmin} onDeleteLiquidation={deleteLiquidation}
             canApproveReceipts={!!isAdmin}
             plantOptions={scopedPlantOptions}
             plantTitle={activePlantLabel}
@@ -581,7 +791,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
           />
         )}
         {activeModule === "audit" && (
-          <AuditTrailTab auditLog={auditLog} />
+          <AuditTrailTab auditLog={auditLog} canDelete={isSuperAdmin} onDelete={deleteAuditEntries} />
         )}
         {activeModule === "documents" && (
           <PcfDocumentsTab

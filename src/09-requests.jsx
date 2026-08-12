@@ -105,7 +105,7 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
   );
 }
 
-function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, onDisburse, plantOptions, canApprove, canRelease, plantTitle }) {
+function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, onDisburse, plantOptions, canApprove, canRelease, plantTitle, canDelete, onDelete }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
@@ -179,6 +179,11 @@ function RequestsTab({ requests, funds, onCreate, onEdit, onApprove, onReject, o
                         )}
                         {r.status !== "Disbursed" && (
                           <button className="pcp-btn pcp-btn-sm" onClick={() => setEditing(r)} title="Edit request"><Edit3 size={12} /></button>
+                        )}
+                        {canDelete && onDelete && (
+                          <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => onDelete(r.id)} title="Delete request (super admin)">
+                            <Trash2 size={13} color="var(--brand)" />
+                          </button>
                         )}
                         {canRelease && r.status === "Approved" && (
                           <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => onDisburse(r)}>Release</button>

@@ -29,7 +29,7 @@ reorder `PCP_SRC_FILES`. If you add a new file, insert it in the right place.
 | File | Contents |
 |------|----------|
 | `01-imports.jsx` | The `import` lines (React, recharts, xlsx, lucide-react). **Keep all imports here only** — importing the same thing twice is a syntax error. |
-| `02-helpers.jsx` | Formatting/date helpers, seed data, derived-metric functions (`computeMetrics`, `monitoringForFund`, `liqStatusFor`, …). |
+| `02-helpers.jsx` | Formatting/date helpers, seed data, derived-metric functions (`computeMetrics`, `monitoringForFund`, `liqStatusFor`, …) and the receipt-amount / cash-settlement engine (`receiptAmountSummary`, `reconcileReceipts`, `settlementStateFor`, `liqFinalStatus`, `findDuplicateReceipts`). |
 | `03-report-engine.jsx` | The Report Center engine: `money()`, `REPORT_TYPES`, `buildReport()`, Excel/CSV/print builders, `printReportDocument()`. |
 | `04-acumatica-export.jsx` | Acumatica "Purchase Orders Template" export columns/logic. |
 | `05-master-data.jsx` | `BRANCHES`, `COMPANIES`, `PLANTS`, `SUBACCOUNTS`, `TAX_CATEGORIES`, `EXPENSE_CATEGORIES`, account map, user `ROLES` / access resolution. |
@@ -38,7 +38,7 @@ reorder `PCP_SRC_FILES`. If you add a new file, insert it in the right place.
 | `08-dashboard.jsx` | Dashboard screen + KPI cards. |
 | `09-requests.jsx` | Petty Cash Requests screen. |
 | `10-disbursements.jsx` | Release Ledger / Disbursements screen. |
-| `11-liquidation.jsx` | Liquidation worksheet screen. |
+| `11-liquidation.jsx` | Liquidation worksheet screen — per-document receipt amounts, reconciliation against the PCF released amount, and the Cash Settlement step that drives `LIQUIDATED`. |
 | `12-masterdata-tab.jsx` | Funds & Master Data admin screen. |
 | `13-reports-aging.jsx` | Edit-balances modal, liquidation-aging engine + Liquidation Aging screen. |
 | `14-report-center.jsx` | `ManagementReportTab` — the print-ready Report Center screen. |
