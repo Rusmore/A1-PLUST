@@ -148,6 +148,14 @@ const RECEIPT_DOC_TYPES = [
 ];
 const DEFAULT_DOC_TYPE = "Official Receipt";
 
+/* Document types that merely SUPPORT the liquidation and carry no peso amount
+   of their own (approval sheets, permits, photos, correspondence…). Their
+   Receipt Amount is optional — still counted if one is entered, but never
+   required and never a reason to block submission. Add a type here to exempt
+   it. */
+const NON_AMOUNT_DOC_TYPES = ["Other Supporting Document"];
+const docRequiresAmount = (a) => !NON_AMOUNT_DOC_TYPES.includes((a && a.docType) || DEFAULT_DOC_TYPE);
+
 /* Peso amounts are held to centavos so comparisons never fail on float dust. */
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -163,19 +171,25 @@ function receiptAmountOf(a) {
 }
 
 /* Roll-up of the per-document receipt amounts. `approvedTotal` is the figure
-   used for reconciliation; `missing` counts documents still awaiting an amount
-   (rejected ones are exempt because they never enter the total). */
+   used for reconciliation; `missing` counts documents still awaiting an amount.
+   Rejected documents are exempt because they never enter the total, and so are
+   the non-amount supporting types (see NON_AMOUNT_DOC_TYPES). */
 function receiptAmountSummary(liq) {
   const atts = (liq && liq.attachments) || [];
-  let approvedTotal = 0, allTotal = 0, missing = 0, approvedCount = 0;
+  let approvedTotal = 0, allTotal = 0, missing = 0, approvedCount = 0, amountBearing = 0, exemptByType = 0;
   atts.forEach((a) => {
     const amt = receiptAmountOf(a);
     allTotal += amt;
-    if ((a.approvalStatus || "Pending") !== "Rejected" && !(Number(a.receiptAmount) > 0)) missing++;
+    if (!docRequiresAmount(a)) exemptByType++;
+    const needsAmount = (a.approvalStatus || "Pending") !== "Rejected" && docRequiresAmount(a);
+    if (needsAmount) {
+      amountBearing++;
+      if (!(Number(a.receiptAmount) > 0)) missing++;
+    }
     if (isCountableReceipt(a)) { approvedTotal += amt; approvedCount++; }
   });
   return {
-    docCount: atts.length, approvedCount,
+    docCount: atts.length, approvedCount, amountBearing, exemptByType,
     approvedTotal: round2(approvedTotal), allTotal: round2(allTotal),
     missing, complete: atts.length > 0 && missing === 0,
   };

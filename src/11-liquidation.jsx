@@ -353,7 +353,17 @@ function LiquidationWorksheet({
           <div><div className="pcp-kpi-label">Total Receipt Amount (approved docs)</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(receiptSummary.approvedTotal)} <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>({receiptSummary.approvedCount} doc{receiptSummary.approvedCount === 1 ? "" : "s"})</span></div></div>
           <div><div className="pcp-kpi-label">All Documents Encoded</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(receiptSummary.allTotal)} <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>({receiptSummary.docCount} doc{receiptSummary.docCount === 1 ? "" : "s"})</span></div></div>
           <div><div className="pcp-kpi-label">Receipts Approved</div><div className="pcp-num" style={{ fontWeight: 700 }}>{approvalSummary.approved} / {approvalSummary.total}</div></div>
-          <div><div className="pcp-kpi-label">Amounts Captured</div><div className="pcp-num" style={{ fontWeight: 700, color: receiptSummary.missing ? "var(--amber)" : "var(--green)" }}>{receiptSummary.docCount - receiptSummary.missing} / {receiptSummary.docCount}</div></div>
+          <div>
+            <div className="pcp-kpi-label">Amounts Captured</div>
+            <div className="pcp-num" style={{ fontWeight: 700, color: receiptSummary.missing ? "var(--amber)" : "var(--green)" }}>
+              {receiptSummary.amountBearing - receiptSummary.missing} / {receiptSummary.amountBearing}
+            </div>
+            {receiptSummary.exemptByType > 0 && (
+              <div style={{ fontSize: 10, color: "var(--text-mut)", marginTop: 1 }}>
+                {receiptSummary.exemptByType} supporting doc(s) need no amount
+              </div>
+            )}
+          </div>
           <div><div className="pcp-kpi-label">Encoded Expense Lines</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(total)} <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>({validLines.length} line{validLines.length === 1 ? "" : "s"})</span></div></div>
         </div>
 
@@ -609,6 +619,10 @@ function LiquidationWorksheet({
               const history = (pa && pa.approvalHistory) || a.approvalHistory || [];
               const amtHistory = (pa && pa.amountHistory) || a.amountHistory || [];
               const isSaved = !!pa;
+              /* General supporting documents carry no peso figure, so their
+                 amount and reference number stay optional. */
+              const needsAmount = docRequiresAmount(a);
+              const amountMissing = needsAmount && status !== "Rejected" && !(Number(a.receiptAmount) > 0);
               const isImage = (a.type || "").startsWith("image");
               const isPdf = (a.type || "").includes("pdf");
               return (
@@ -652,20 +666,27 @@ function LiquidationWorksheet({
                     </select>
                   </div>
                   <div style={{ minWidth: 145 }}>
-                    <div className="pcp-kpi-label">Receipt / Invoice No.</div>
+                    <div className="pcp-kpi-label">
+                      Receipt / Invoice No. <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>(optional)</span>
+                    </div>
                     <input
-                      className="pcp-input" placeholder="e.g. OR-1234" value={a.receiptNo || ""} readOnly={amountsLocked}
+                      className="pcp-input" placeholder={needsAmount ? "e.g. OR-1234" : "—"} value={a.receiptNo || ""} readOnly={amountsLocked}
                       onChange={(e) => updateAttachment(a.id, { receiptNo: e.target.value })}
                     />
                   </div>
                   <div style={{ minWidth: 150 }}>
-                    <div className="pcp-kpi-label">Receipt Amount (&#8369;) <span style={{ color: "var(--brand)" }}>*</span></div>
+                    <div className="pcp-kpi-label">
+                      Receipt Amount (&#8369;) {needsAmount
+                        ? <span style={{ color: "var(--brand)" }}>*</span>
+                        : <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>(optional)</span>}
+                    </div>
                     <input
-                      type="number" min="0" step="0.01" className="pcp-input" placeholder="0.00"
+                      type="number" min="0" step="0.01" className="pcp-input"
+                      placeholder={needsAmount ? "0.00" : "—"}
                       value={a.receiptAmount == null ? "" : a.receiptAmount}
                       readOnly={amountsLocked}
                       onChange={(e) => setReceiptAmount(a.id, e.target.value)}
-                      style={!(Number(a.receiptAmount) > 0) && status !== "Rejected" ? { borderColor: "var(--brand)" } : undefined}
+                      style={amountMissing ? { borderColor: "var(--brand)" } : undefined}
                     />
                   </div>
                   <div style={{ flex: 1, minWidth: 130, textAlign: "right" }}>
@@ -675,9 +696,14 @@ function LiquidationWorksheet({
                     </div>
                   </div>
                 </div>
-                {!(Number(a.receiptAmount) > 0) && status !== "Rejected" && (
+                {amountMissing && (
                   <div style={{ fontSize: 10.5, color: "var(--brand)", marginTop: 5 }}>
                     Receipt amount is required before this liquidation can be submitted.
+                  </div>
+                )}
+                {!needsAmount && !(Number(a.receiptAmount) > 0) && (
+                  <div style={{ fontSize: 10.5, color: "var(--text-mut)", marginTop: 5 }}>
+                    No amount needed for a general supporting document. Enter one only if this document shows a peso amount that forms part of the liquidation.
                   </div>
                 )}
                 {status !== "Approved" && status !== "Rejected" && Number(a.receiptAmount) > 0 && (
