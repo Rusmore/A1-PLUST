@@ -47,6 +47,7 @@ reorder `PCP_SRC_FILES`. If you add a new file, insert it in the right place.
 | `17-audit.jsx` | Audit Trail screen. |
 | `18-account-admin.jsx` | User management + system settings screens. |
 | `22-reimbursement.jsx` | Reimbursement Module (AF P16): policy config + validation engine, multi-step reimbursement form, approval/liquidation/payment workflow, dashboard, aging & Acumatica export. Loads **before** `19-app.jsx` so its constants exist when `App` renders. |
+| `23-cash-management.jsx` | Cash Management module (Sections 24–27): Physical Cash Count, Cash Reconciliation and Cash Return / Unused Balance screens, all with peso denomination breakdowns. Loads **before** `19-app.jsx`. |
 | `19-app.jsx` | The main `App` component (state, storage, navigation, wiring). |
 | `20-auth-gate.jsx` | Sign-in gate / local + Supabase auth. |
 | `21-root-mount.jsx` | `Root` component + `createRoot(...).render(...)`. |

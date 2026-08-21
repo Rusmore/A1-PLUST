@@ -771,10 +771,10 @@ const taxCategoryLabel = (code) => {
 /* Each role only sees the nav tabs relevant to it. Plant-level data access is
    controlled separately (per user) so a custodian only sees their own plants. */
 const ROLES = {
-  "SuperAdmin": { label: "System Administrator", tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
-  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
-  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata"] },
-  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents"] },
+  "SuperAdmin": { label: "System Administrator", tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "cash", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
+  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "cash", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
+  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "cash", "history", "report", "aging", "documents", "audit", "masterdata"] },
+  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "cash", "history", "report", "aging", "documents"] },
 };
 const ROLE_NAMES = Object.keys(ROLES);
 
