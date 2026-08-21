@@ -212,6 +212,35 @@ const CSS = `
   .pcp-voucher-card:hover { border-color: var(--brand); }
   .pcp-voucher-card.active { border-color: var(--brand); background: var(--red-bg); }
 
+  /* ---- Cash denomination table (Section 23) ---- */
+  .pcp-denom-table { width: 100%; border-collapse: collapse; }
+  .pcp-denom-table th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-mut); font-weight: 700; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+  .pcp-denom-table td { padding: 4px 8px; font-size: 12.5px; border-bottom: 1px solid #eef0f3; }
+  .pcp-denom-table tfoot td { border-top: 2px solid var(--line); border-bottom: none; }
+
+  /* ---- Liquidation workspace (Section 25 — maximize screen space) ---- */
+  .pcp-liq-full .pcp-content { padding: 14px 18px 48px 18px; }
+  .pcp-liq-workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
+  .pcp-liq-sticky {
+    position: sticky; top: 8px; z-index: 5; background: var(--card, #fff);
+    border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px;
+    box-shadow: 0 1px 4px rgba(20,24,40,0.06);
+  }
+  .pcp-liq-sticky-grid { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; }
+  .pcp-liq-metric .pcp-kpi-label { font-size: 10px; }
+  .pcp-liq-metric .pcp-num { font-size: 14px; font-weight: 700; }
+  .pcp-collapse { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+  .pcp-collapse-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 14px; cursor: pointer; background: var(--paper); font-weight: 700; font-size: 12.5px;
+    user-select: none;
+  }
+  .pcp-collapse-head:hover { background: #eef0f5; }
+  .pcp-collapse-body { padding: 12px 14px; }
+  .pcp-liq-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 1100px) { .pcp-liq-cols { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .pcp-liq-workspace { grid-template-columns: 1fr; } }
+
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-thumb { background: #d3d6de; border-radius: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -449,6 +478,7 @@ const PLANT_MODULES = [
   { key: "requests", label: "Petty Cash Requests", icon: ClipboardList },
   { key: "disbursements", label: "Release Ledger", icon: Receipt },
   { key: "liquidation", label: "Liquidation", icon: FileSpreadsheet },
+  { key: "reimbursement", label: "Reimbursement", icon: ArrowLeftRight },
   { key: "replenishment", label: "Replenishment", icon: RefreshCw },
   { key: "history", label: "Transaction History", icon: History },
   { key: "report", label: "Reports", icon: FileText },
@@ -639,7 +669,84 @@ function Badge({ status }) {
     /* Cash-settlement / final liquidation states */
     LIQUIDATED: "green", "NOT YET LIQUIDATED": "amber", "Under Review": "red",
     SETTLED: "green", UNSETTLED: "amber",
+    /* Reimbursement workflow states (Section 14) */
+    DRAFT: "gray", SUBMITTED: "amber", "FOR REVIEW": "amber", "FOR APPROVAL": "amber",
+    APPROVED: "blue", "RETURNED FOR REVISION": "red", REJECTED: "red",
+    "FOR LIQUIDATION": "blue", "LIQUIDATION COMPLETED": "blue", "FOR PAYMENT": "amber",
+    "UNDER REVIEW": "amber",
+    PAID: "green", COMPLETED: "green",
+    /* Acumatica export states */
+    "Not Yet Exported": "gray", "Ready for Acumatica": "amber", Exported: "blue",
+    Posted: "green", "Posting Error": "red",
   };
   const cls = map[status] || "gray";
   return <span className={`pcp-badge pcp-badge-${cls}`}>{status}</span>;
+}
+
+/* Cash Denomination editor (Section 23) — records the physical peso breakdown of
+   a cash transaction and validates it against the applicable amount. Not shown
+   for non-cash (e.g. Check) payments. `value` is a { denom: qty } map. */
+function CashDenominationEditor({ value, onChange, target, title }) {
+  const counts = value || {};
+  const setQty = (d, raw) => {
+    const q = Math.max(0, Math.floor(Number(raw) || 0));
+    onChange({ ...counts, [d]: q });
+  };
+  const total = denominationTotal(counts);
+  const variance = round2(total - (Number(target) || 0));
+  const matches = variance === 0;
+  return (
+    <div className="pcp-denom">
+      <div className="pcp-section-title" style={{ margin: "0 0 8px", fontSize: 12.5 }}>{title || "Cash Denomination Breakdown"}</div>
+      <table className="pcp-denom-table">
+        <thead><tr><th>Denomination</th><th>Quantity</th><th style={{ textAlign: "right" }}>Subtotal</th></tr></thead>
+        <tbody>
+          {PESO_DENOMINATIONS.map((d) => (
+            <tr key={d}>
+              <td>{peso(d)}</td>
+              <td>
+                <input type="number" min="0" step="1" className="pcp-input" style={{ width: 90, padding: "4px 8px" }}
+                  value={counts[d] == null ? "" : counts[d]} onChange={(e) => setQty(d, e.target.value)} placeholder="0" />
+              </td>
+              <td className="pcp-num" style={{ textAlign: "right" }}>{peso(d * (Number(counts[d]) || 0))}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td style={{ fontWeight: 700 }}>Denomination Total</td>
+            <td></td>
+            <td className="pcp-num" style={{ textAlign: "right", fontWeight: 700 }}>{peso(total)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      {Number(target) > 0 && (
+        <div style={{ marginTop: 8, padding: "8px 11px", borderRadius: 8, fontSize: 12,
+          background: matches ? "var(--green-bg)" : "var(--red-bg)", color: matches ? "var(--green)" : "var(--brand-dark)" }}>
+          {matches
+            ? <><Check size={13} style={{ verticalAlign: "-2px" }} /> Denomination total matches the cash amount of {peso(target)}.</>
+            : <><AlertTriangle size={13} style={{ verticalAlign: "-2px" }} /> Variance of {peso(Math.abs(variance))} — the denomination total ({peso(total)}) does not match the cash amount ({peso(target)}). Correct the breakdown before completing this cash transaction.</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Collapsible/accordion section used to keep secondary Liquidation detail
+   tucked away so the working area stays uncrowded (Section 25). */
+function Collapsible({ title, subtitle, defaultOpen, right, children }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <div className="pcp-collapse">
+      <div className="pcp-collapse-head" onClick={() => setOpen((o) => !o)}>
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <ChevronRight size={15} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.12s" }} />
+          {title}
+          {subtitle && <span style={{ fontWeight: 500, fontSize: 11, color: "var(--text-mut)" }}>{subtitle}</span>}
+        </span>
+        {right && <span onClick={(e) => e.stopPropagation()}>{right}</span>}
+      </div>
+      {open && <div className="pcp-collapse-body">{children}</div>}
+    </div>
+  );
 }

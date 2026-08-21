@@ -261,94 +261,72 @@ function LiquidationWorksheet({
   };
 
   return (
-    <div className="pcp-card pcp-card-pad">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
-        <div>
-          <div className="pcp-eyebrow">Voucher {disbursement.voucherNo}</div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{disbursement.employee}</div>
-          <div style={{ fontSize: 12, color: "var(--text-mut)", marginTop: 2 }}>
-            {disbursement.branchCode} · {companyOfBranch(disbursement.branchCode)} · {fmtDate(disbursement.date)}
+    <div>
+      {/* Sticky summary + action bar so Finance always sees the key figures and
+          primary actions without scrolling (Section 25). */}
+      <div className="pcp-liq-sticky">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div className="pcp-eyebrow">Source: Petty Cash Advance · Voucher {disbursement.voucherNo}</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{disbursement.employee}</div>
+            <div style={{ fontSize: 12, color: "var(--text-mut)", marginTop: 2 }}>
+              {disbursement.branchCode} · {companyOfBranch(disbursement.branchCode)} · {fmtDate(disbursement.date)}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7, flexWrap: "wrap" }}>
+              <Badge status={finalStatus} />
+              <Badge status={isDraft ? "Draft" : "Submitted"} />
+              {!isDraft && liquidation && liquidation.submittedBy && (
+                <span style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
+                  submitted by {liquidation.submittedBy} · {(liquidation.submittedAt || "").replace("T", " ")}
+                </span>
+              )}
+            </div>
           </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7 }}>
-            <Badge status={finalStatus} />
-            <Badge status={isDraft ? "Draft" : "Submitted"} />
-            {!isDraft && liquidation && liquidation.submittedBy && (
-              <span style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
-                submitted by {liquidation.submittedBy} · {(liquidation.submittedAt || "").replace("T", " ")}
-              </span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <button className="pcp-btn pcp-btn-sm" onClick={() => onExport(disbursement, { lines: validLines })} disabled={!validLines.length}>
+              <Download size={12} /> Export to Excel
+            </button>
+            <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={handleSave}>
+              {saved ? "Saved" : "Save Liquidation"}
+            </button>
+            {isDraft ? (
+              <button
+                className="pcp-btn pcp-btn-sm pcp-btn-primary"
+                onClick={handleSubmit}
+                disabled={!canSubmit}
+                title={canSubmit ? "Submit the final liquidation" : `To submit: ${submitBlockers.join("; ")}`}
+              >
+                <Check size={12} /> Submit Liquidation
+              </button>
+            ) : canApproveReceipts && (
+              <button className="pcp-btn pcp-btn-sm" onClick={handleReopen} title="Reopen for editing (recorded in the audit trail)">
+                <Edit3 size={12} /> Reopen
+              </button>
+            )}
+            {canDelete && onDeleteLiquidation && liquidation && (
+              <button
+                className="pcp-btn pcp-btn-sm pcp-btn-danger"
+                onClick={() => onDeleteLiquidation(disbursement.id)}
+                title="Delete this liquidation and return the voucher to the worklist (super admin)"
+              >
+                <Trash2 size={12} /> Delete Liquidation
+              </button>
             )}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button className="pcp-btn pcp-btn-sm" onClick={() => onExport(disbursement, { lines: validLines })} disabled={!validLines.length}>
-            <Download size={12} /> Export to Excel
-          </button>
-          <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={handleSave}>
-            {saved ? "Saved" : "Save Liquidation"}
-          </button>
-          {isDraft ? (
-            <button
-              className="pcp-btn pcp-btn-sm pcp-btn-primary"
-              onClick={handleSubmit}
-              disabled={!canSubmit}
-              title={canSubmit ? "Submit the final liquidation" : `To submit: ${submitBlockers.join("; ")}`}
-            >
-              <Check size={12} /> Submit Liquidation
-            </button>
-          ) : canApproveReceipts && (
-            <button className="pcp-btn pcp-btn-sm" onClick={handleReopen} title="Reopen for editing (recorded in the audit trail)">
-              <Edit3 size={12} /> Reopen
-            </button>
-          )}
-          {canDelete && onDeleteLiquidation && liquidation && (
-            <button
-              className="pcp-btn pcp-btn-sm pcp-btn-danger"
-              onClick={() => onDeleteLiquidation(disbursement.id)}
-              title="Delete this liquidation and return the voucher to the worklist (super admin)"
-            >
-              <Trash2 size={12} /> Delete Liquidation
-            </button>
-          )}
+        <div className="pcp-liq-sticky-grid" style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">PCF Released</div><div className="pcp-num">{peso(disbursement.amount)}</div></div>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">Total Receipts</div><div className="pcp-num">{peso(receiptSummary.approvedTotal)}</div></div>
+          <div className="pcp-liq-metric">
+            <div className="pcp-kpi-label">{st.type === "excess" ? "Excess / Refund" : st.type === "reimburse" ? "Reimbursement Due" : "Variance"}</div>
+            <div className="pcp-num" style={{ color: st.type === "reimburse" ? "var(--brand)" : st.type === "excess" ? "var(--amber)" : "var(--green)" }}>{peso(st.expected)}</div>
+          </div>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">Status</div><div><Badge status={finalStatus} /></div></div>
         </div>
       </div>
 
-      {/* Reconciliation summary — the approved supporting documents measured
-          against the cash actually released to the requestor. */}
-      <div className="pcp-grid-3" style={{ marginBottom: 16 }}>
-        <div className="pcp-card pcp-card-pad" style={{ background: "var(--paper)" }}>
-          <div className="pcp-kpi-label">PCF Released Amount</div>
-          <div className="pcp-kpi-value pcp-num">{peso(disbursement.amount)}</div>
-        </div>
-        <div className="pcp-card pcp-card-pad" style={{ background: "var(--paper)" }}>
-          <div className="pcp-kpi-label">Total Receipt Amount</div>
-          <div className="pcp-kpi-value pcp-num">{peso(receiptSummary.approvedTotal)}</div>
-          <div style={{ fontSize: 10.5, color: "var(--text-mut)", marginTop: 2 }}>
-            {receiptSummary.approvedCount} of {receiptSummary.docCount} document(s) approved
-          </div>
-        </div>
-        <div
-          className="pcp-card pcp-card-pad"
-          style={{ background: st.type === "reimburse" ? "var(--red-bg)" : st.type === "excess" ? "var(--amber-bg)" : "var(--green-bg)" }}
-        >
-          <div className="pcp-kpi-label">
-            {st.type === "excess" ? "Refund / Excess Cash" : st.type === "reimburse" ? "Reimbursement Required" : "Difference"}
-          </div>
-          <div
-            className="pcp-kpi-value pcp-num"
-            style={{ color: st.type === "reimburse" ? "var(--brand)" : st.type === "excess" ? "var(--amber)" : "var(--green)" }}
-          >
-            {peso(st.expected)}
-          </div>
-          <div style={{ fontSize: 10.5, color: "var(--text-mut)", marginTop: 2 }}>
-            {st.type === "exact" ? "Fully reconciled" : st.type === "excess" ? "To be returned to the PCF Custodian" : "Owed to the PCF Requestor"}
-          </div>
-        </div>
-      </div>
-
-      {/* Automated computation + receipt-approval gate. Every total is derived
-          from the individual supporting documents and cannot be edited. */}
-      <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16, background: "var(--paper)" }}>
-        <div className="pcp-section-title" style={{ margin: "0 0 10px" }}>Automated Computation &amp; Receipt Approval</div>
+      {/* Automated computation + receipt-approval gate (collapsible secondary detail). */}
+      <Collapsible title="Automated Computation & Receipt Approval" subtitle="encoded totals, receipt approvals">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 18, fontSize: 12.5 }}>
           <div><div className="pcp-kpi-label">Total Receipt Amount (approved docs)</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(receiptSummary.approvedTotal)} <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>({receiptSummary.approvedCount} doc{receiptSummary.approvedCount === 1 ? "" : "s"})</span></div></div>
           <div><div className="pcp-kpi-label">All Documents Encoded</div><div className="pcp-num" style={{ fontWeight: 700 }}>{peso(receiptSummary.allTotal)} <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>({receiptSummary.docCount} doc{receiptSummary.docCount === 1 ? "" : "s"})</span></div></div>
@@ -388,15 +366,10 @@ function LiquidationWorksheet({
           {approvalSummary.total > 0 && overallApproval === "Pending Approval" && <><strong>Pending Approval</strong> — {approvalSummary.pending} receipt(s) awaiting {RECEIPT_APPROVER_NAME}'s approval. Final liquidation cannot be submitted yet.</>}
           {canSubmitFinal && <><Check size={13} style={{ verticalAlign: "-2px" }} /> <strong>All receipts approved</strong> — this liquidation is ready for final submission.</>}
         </div>
-      </div>
+      </Collapsible>
 
-      {/* Cash Settlement — the final step of the liquidation. The settlement
-          type is auto-classified from the variance between the cash released and
-          the approved receipt total and can never be hand-picked. Ticking the
-          box asserts that the cash HAS actually moved, so the liquidation only
-          becomes LIQUIDATED once the recorded actual amount equals the expected
-          amount (and, for over-liquidation, a reviewer has signed off). */}
-      <div className="pcp-card pcp-card-pad" style={{ marginBottom: 16, background: "var(--paper)" }}>
+      {/* Cash Settlement — collapsible, open by default since it drives completion. */}
+      <Collapsible title="Reconciliation & Cash Settlement" defaultOpen right={<Badge status={st.settled ? "SETTLED" : "UNSETTLED"} />}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div className="pcp-section-title" style={{ margin: 0 }}>Cash Settlement</div>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -538,8 +511,11 @@ function LiquidationWorksheet({
             )}
           </span>
         </div>
-      </div>
+      </Collapsible>
 
+      {/* Main working area — the expense/receipt table is the primary surface. */}
+      <div className="pcp-card pcp-card-pad" style={{ marginBottom: 12 }}>
+      <div className="pcp-section-title" style={{ margin: "0 0 10px" }}>Expense / Liquidation Details</div>
       <div className="pcp-liq-line-head">
         <div>Date</div><div>Expense</div><div>Expense Category (COA)</div><div>Department</div><div>Tax Category</div><div>Amount</div><div></div>
       </div>
@@ -785,6 +761,119 @@ function LiquidationWorksheet({
           <AlertTriangle size={15} /> The encoded expense lines ({peso(total)}) exceed the cash advance by {peso(Math.abs(remaining))}. Check them against the Cash Settlement above, which is computed from the approved receipt amounts.
         </div>
       )}
+      </div>
+    </div>
+  );
+}
+
+/* ---- Reimbursement liquidation panel (Section 26) ----
+   Approved reimbursements are handed off to the Liquidation Module carrying
+   their reference, employee, department, plant, expense lines, documents and
+   approval history — nothing is re-entered. Finance processes the liquidation
+   through FOR LIQUIDATION → UNDER REVIEW → LIQUIDATION COMPLETED, then payment. */
+function ReimbursementLiquidationPanel({ reimb, canFinance, onAction }) {
+  const [comments, setComments] = useState("");
+  const approved = reimbTotal(reimb);
+  /* For a reimbursement the validated expense equals the approved line items,
+     so the variance is normally zero. */
+  const validated = reimbTotal(reimb);
+  const variance = round2(approved - validated);
+  const st = reimb.status;
+  const act = (action) => { onAction(reimb.id, action, { comments }); setComments(""); };
+
+  return (
+    <div>
+      <div className="pcp-liq-sticky">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div className="pcp-eyebrow">Source: Employee Reimbursement · {reimb.reimbNo}</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{reimb.employee}</div>
+            <div style={{ fontSize: 12, color: "var(--text-mut)", marginTop: 2 }}>
+              {subaccountLabel(reimb.department)} · {plantLabel(reimb.branchCode)} · {companyOfBranch(reimb.branchCode)}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7, flexWrap: "wrap" }}>
+              <Badge status={st} />
+              <span style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
+                Reimbursement Ref: {reimb.reimbNo}{reimb.approvedBy ? ` · approved by ${reimb.approvedBy}` : ""}
+              </span>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {canFinance && st === REIMB_STATUS.FOR_LIQUIDATION && (
+              <button className="pcp-btn pcp-btn-sm" onClick={() => act("liquidation-review")}><Search size={12} /> Start Review</button>
+            )}
+            {canFinance && (st === REIMB_STATUS.FOR_LIQUIDATION || st === REIMB_STATUS.UNDER_REVIEW) && (
+              <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => act("liquidation-complete")}><Check size={12} /> Mark Liquidation Completed</button>
+            )}
+            {canFinance && st === REIMB_STATUS.LIQUIDATION_DONE && (
+              <button className="pcp-btn pcp-btn-sm pcp-btn-primary" onClick={() => act("for-payment")}><Banknote size={12} /> Move to Payment</button>
+            )}
+          </div>
+        </div>
+        <div className="pcp-liq-sticky-grid" style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">Approved Reimbursement</div><div className="pcp-num">{peso(approved)}</div></div>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">Validated Expense</div><div className="pcp-num">{peso(validated)}</div></div>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">Variance</div><div className="pcp-num" style={{ color: variance === 0 ? "var(--green)" : "var(--brand)" }}>{peso(variance)}</div></div>
+          <div className="pcp-liq-metric"><div className="pcp-kpi-label">Status</div><div><Badge status={st} /></div></div>
+        </div>
+      </div>
+
+      <div className="pcp-card pcp-card-pad" style={{ marginBottom: 12 }}>
+        <div className="pcp-section-title" style={{ margin: "0 0 6px" }}>Expense / Liquidation Details</div>
+        <div style={{ fontSize: 12, color: "var(--text-mut)", marginBottom: 10 }}>{reimb.purpose}</div>
+        <div className="pcp-table-wrap">
+          <table className="pcp-table">
+            <thead><tr><th>Date Incurred</th><th>Category</th><th>Description</th><th>Vendor</th><th>Account</th><th>Dept</th><th>Amount</th></tr></thead>
+            <tbody>
+              {(reimb.lines || []).map((l) => (
+                <tr key={l.id}>
+                  <td>{fmtDate(l.date)}</td><td>{l.category}</td><td>{l.description}</td>
+                  <td>{l.vendor || "—"}</td><td>{l.account || "—"}</td><td>{deptDesc(l.department)}</td>
+                  <td className="pcp-num">{peso(l.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr><td colSpan={6} style={{ textAlign: "right", fontWeight: 600 }}>Approved Amount</td><td className="pcp-num" style={{ fontWeight: 700 }}>{peso(approved)}</td></tr></tfoot>
+          </table>
+        </div>
+        {variance !== 0 && (
+          <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, fontSize: 12, background: "var(--red-bg)", color: "var(--brand-dark)" }}>
+            <AlertTriangle size={13} style={{ verticalAlign: "-2px" }} /> Variance of {peso(Math.abs(variance))} between the approved reimbursement and the validated expense must be reviewed and resolved before completion.
+          </div>
+        )}
+      </div>
+
+      <Collapsible title="Supporting Documents" subtitle={`${(reimb.attachments || []).length} file(s) carried forward`}>
+        {(reimb.attachments || []).length ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {reimb.attachments.map((a) => (
+              <a key={a.id} href={a.data} download={a.name} style={{ fontSize: 12, color: "var(--brand)" }}>
+                <Paperclip size={12} /> {a.name} · {a.docType}
+              </a>
+            ))}
+          </div>
+        ) : <div style={{ fontSize: 12, color: "var(--text-mut)" }}>None</div>}
+      </Collapsible>
+
+      <Collapsible title="Approval History & Audit Trail" subtitle={`${(reimb.history || []).length} event(s)`}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {(reimb.history || []).map((h, i) => (
+            <div key={i} style={{ fontSize: 11.5, color: "var(--text-mut)" }}>
+              {h.ts} · <b>{h.action}</b> · {h.user}{h.prevStatus ? ` · ${h.prevStatus} → ${h.newStatus}` : ""}{h.comments ? ` · "${h.comments}"` : ""}
+            </div>
+          ))}
+          {!(reimb.history || []).length && <div style={{ fontSize: 12, color: "var(--text-mut)" }}>No history yet.</div>}
+        </div>
+      </Collapsible>
+
+      {canFinance && (st === REIMB_STATUS.FOR_LIQUIDATION || st === REIMB_STATUS.UNDER_REVIEW) && (
+        <div className="pcp-card pcp-card-pad">
+          <div className="pcp-field" style={{ margin: 0 }}>
+            <label>Review Remarks (recorded in the audit trail)</label>
+            <textarea className="pcp-input" rows={2} value={comments} onChange={(e) => setComments(e.target.value)} placeholder="Optional notes for this liquidation review" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -793,10 +882,13 @@ function LiquidationTab({
   disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions, plantTitle,
   canApproveReceipts, onDecideReceipt, onSubmitLiquidation, onReopenLiquidation,
   onRecordSettlement, onReviewOverLiquidation, canDelete, onDeleteLiquidation,
+  reimbursements, onReimbursementAction, canFinance,
 }) {
   const [selectedId, setSelectedId] = useState(null);
+  const [selectedReimbId, setSelectedReimbId] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [plant, setPlant] = useState("ALL");
+  const [source, setSource] = useState("pettycash");
 
   const scoped = plant === "ALL" ? disbursements : disbursements.filter((d) => d.branchCode === plant);
   const enriched = scoped.map((d) => ({
@@ -813,11 +905,21 @@ function LiquidationTab({
     return liq && liq.lines && liq.lines.length;
   }).length;
 
+  /* Reimbursement liquidations (Section 26) — approved reimbursements handed off
+     to the Liquidation Module, carrying their reference back to the request. */
+  const reimbScoped = (reimbursements || []).filter((r) => plant === "ALL" || r.branchCode === plant);
+  const reimbLiq = reimbScoped.filter((r) => REIMB_LIQUIDATION_STATUSES.includes(r.status));
+  const reimbActive = showAll ? reimbLiq : reimbLiq.filter((r) => r.status === REIMB_STATUS.FOR_LIQUIDATION || r.status === REIMB_STATUS.UNDER_REVIEW);
+  const selectedReimb = reimbLiq.find((r) => r.id === selectedReimbId) || reimbActive[0] || null;
+
+  const pettyCount = list.length;
+  const reimbCount = reimbActive.length;
+
   return (
-    <div>
+    <div className="pcp-liq-full">
       <TopBar
         title={(plantTitle ? plantTitle + " \u00b7 " : "") + "Liquidation"}
-        sub="Break down each cash advance into itemized receipts and reconcile the balance"
+        sub="Liquidate petty cash advances and approved employee reimbursements in one professional workspace"
         right={
           <button className="pcp-btn pcp-btn-primary" onClick={onExportAll} disabled={!exportableCount}>
             <Download size={14} /> Export All to Acumatica
@@ -825,49 +927,83 @@ function LiquidationTab({
         }
       />
       <div className="pcp-content">
-        <PlantScopeTabs plants={plantOptions} value={plant} onChange={(v) => { setPlant(v); setSelectedId(null); }} />
-        <div className="pcp-grid-2" style={{ gridTemplateColumns: "340px 1fr" }}>
+        <PlantScopeTabs plants={plantOptions} value={plant} onChange={(v) => { setPlant(v); setSelectedId(null); setSelectedReimbId(null); }} />
+
+        {/* Source selector — keep petty cash and reimbursement rules separate. */}
+        <div className="pcp-tabs" style={{ marginBottom: 14 }}>
+          <button className={"pcp-tab" + (source === "pettycash" ? " active" : "")} onClick={() => setSource("pettycash")}>
+            Petty Cash Advance ({pettyCount})
+          </button>
+          <button className={"pcp-tab" + (source === "reimbursement" ? " active" : "")} onClick={() => setSource("reimbursement")}>
+            Employee Reimbursement ({reimbCount})
+          </button>
+          <label style={{ marginLeft: "auto", fontSize: 11.5, display: "flex", alignItems: "center", gap: 5, color: "var(--text-mut)" }}>
+            <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show completed
+          </label>
+        </div>
+
+        <div className="pcp-liq-workspace">
           <div className="pcp-card pcp-card-pad">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <div className="pcp-section-title" style={{ margin: 0 }}>Vouchers</div>
-              <label style={{ fontSize: 11.5, display: "flex", alignItems: "center", gap: 5, color: "var(--text-mut)" }}>
-                <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show all
-              </label>
+            <div className="pcp-section-title" style={{ margin: "0 0 10px" }}>
+              {source === "pettycash" ? "Vouchers" : "Reimbursements"}
             </div>
-            {list.length ? list.map((d) => (
-              <div key={d.id} className={"pcp-voucher-card" + (selected && selected.id === d.id ? " active" : "")} onClick={() => setSelectedId(d.id)}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <strong style={{ fontSize: 12.5 }}>{d.voucherNo}</strong>
-                  <span className="pcp-num" style={{ fontSize: 12.5, fontWeight: 700 }}>{peso(d.amount)}</span>
+            {source === "pettycash" ? (
+              list.length ? list.map((d) => (
+                <div key={d.id} className={"pcp-voucher-card" + (selected && selected.id === d.id ? " active" : "")} onClick={() => setSelectedId(d.id)}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <strong style={{ fontSize: 12.5 }}>{d.voucherNo}</strong>
+                    <span className="pcp-num" style={{ fontSize: 12.5, fontWeight: 700 }}>{peso(d.amount)}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--text-mut)", marginTop: 2 }}>{d.employee} · {d.branchCode}</div>
+                  <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    <Badge status={d.liqStatus} />
+                    <Badge status={d.finalStatus} />
+                  </div>
                 </div>
-                <div style={{ fontSize: 11.5, color: "var(--text-mut)", marginTop: 2 }}>{d.employee} · {d.branchCode}</div>
-                <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
-                  <Badge status={d.liqStatus} />
-                  <Badge status={d.finalStatus} />
+              )) : <div className="pcp-empty">{showAll ? "No vouchers yet" : "Every voucher is fully liquidated and settled"}</div>
+            ) : (
+              (showAll ? reimbLiq : reimbActive).length ? (showAll ? reimbLiq : reimbActive).map((r) => (
+                <div key={r.id} className={"pcp-voucher-card" + (selectedReimb && selectedReimb.id === r.id ? " active" : "")} onClick={() => setSelectedReimbId(r.id)}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <strong style={{ fontSize: 12.5 }}>{r.reimbNo}</strong>
+                    <span className="pcp-num" style={{ fontSize: 12.5, fontWeight: 700 }}>{peso(reimbTotal(r))}</span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "var(--text-mut)", marginTop: 2 }}>{r.employee} · {r.branchCode}</div>
+                  <div style={{ marginTop: 6, display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    <Badge status={r.status} />
+                  </div>
                 </div>
-              </div>
-            )) : <div className="pcp-empty">{showAll ? "No vouchers yet" : "Every voucher is fully liquidated and settled"}</div>}
+              )) : <div className="pcp-empty">{showAll ? "No reimbursement liquidations yet" : "No reimbursements awaiting liquidation"}</div>
+            )}
           </div>
 
-          {selected ? (
-            <LiquidationWorksheet
-              disbursement={selected}
-              liquidation={liquidationFor(selected.id, liquidations)}
-              onSave={onSaveLiquidation}
-              onExport={onExport}
-              canApproveReceipts={canApproveReceipts}
-              onDecideReceipt={onDecideReceipt}
-              liquidations={liquidations}
-              disbursements={disbursements}
-              onSubmitLiquidation={onSubmitLiquidation}
-              onReopenLiquidation={onReopenLiquidation}
-              onRecordSettlement={onRecordSettlement}
-              onReviewOverLiquidation={onReviewOverLiquidation}
-              canDelete={canDelete}
-              onDeleteLiquidation={onDeleteLiquidation}
-            />
+          {source === "pettycash" ? (
+            selected ? (
+              <LiquidationWorksheet
+                disbursement={selected}
+                liquidation={liquidationFor(selected.id, liquidations)}
+                onSave={onSaveLiquidation}
+                onExport={onExport}
+                canApproveReceipts={canApproveReceipts}
+                onDecideReceipt={onDecideReceipt}
+                liquidations={liquidations}
+                disbursements={disbursements}
+                onSubmitLiquidation={onSubmitLiquidation}
+                onReopenLiquidation={onReopenLiquidation}
+                onRecordSettlement={onRecordSettlement}
+                onReviewOverLiquidation={onReviewOverLiquidation}
+                canDelete={canDelete}
+                onDeleteLiquidation={onDeleteLiquidation}
+              />
+            ) : (
+              <div className="pcp-card pcp-card-pad"><div className="pcp-empty">Select a voucher to begin liquidation</div></div>
+            )
           ) : (
-            <div className="pcp-card pcp-card-pad"><div className="pcp-empty">Select a voucher to begin liquidation</div></div>
+            selectedReimb ? (
+              <ReimbursementLiquidationPanel reimb={selectedReimb} canFinance={canFinance} onAction={onReimbursementAction} />
+            ) : (
+              <div className="pcp-card pcp-card-pad"><div className="pcp-empty">Select a reimbursement to process its liquidation</div></div>
+            )
           )}
         </div>
       </div>

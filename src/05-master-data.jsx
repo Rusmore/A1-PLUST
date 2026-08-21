@@ -142,6 +142,25 @@ const plantLabel = (code) => (PLANTS.find((p) => p.code === code) || {}).label |
 /* Resolve a user's allowed plant list ("ALL" -> every plant code). */
 const resolvePlants = (plants) => (plants === "ALL" || !plants) ? PLANT_CODES.slice() : plants.filter((c) => PLANT_CODES.includes(c));
 
+/* ---------------------------------------------------------------------------
+   PETTY CASH REQUEST — approved Plant / Branch dropdown (Section 24)
+   The New Petty Cash Request form must offer ONLY these configured values
+   (no free-text entry). Administrators maintain this list here so it can be
+   updated without touching the request form. Codes map to the BRANCHES master
+   so the selection flows through approval, liquidation, replenishment and
+   reporting unchanged.
+--------------------------------------------------------------------------- */
+const PCR_BRANCH_CODES = ["D1", "D2", "D3", "D5", "D6", "D7", "D8", "D9", "HASBRO", "SITIO", "MATTEL", "PERULANDIA", "WARNER", "A1+", "RG", "ST"];
+const PCR_BRANCH_LABELS = {
+  "A1+": "A1+ Paper and Plastic Inc.",
+  "RG": "RG & Co. Property Management Corporation",
+  "ST": "Starkson Paper and Plastic Corporation",
+};
+const PCR_BRANCH_OPTIONS = PCR_BRANCH_CODES.map((code) => {
+  const b = BRANCHES.find((x) => x.code === code);
+  return { code, label: PCR_BRANCH_LABELS[code] || (b ? b.name : code) };
+});
+
 const SUBACCOUNTS = [
   {
     "code": "000-00000",
@@ -752,10 +771,10 @@ const taxCategoryLabel = (code) => {
 /* Each role only sees the nav tabs relevant to it. Plant-level data access is
    controlled separately (per user) so a custodian only sees their own plants. */
 const ROLES = {
-  "SuperAdmin": { label: "System Administrator", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
-  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
-  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata"] },
-  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "replenishment", "history", "report", "aging", "documents"] },
+  "SuperAdmin": { label: "System Administrator", tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
+  "Accounting": { label: "Accounting Department", tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata", "users", "settings"] },
+  "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata"] },
+  "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents"] },
 };
 const ROLE_NAMES = Object.keys(ROLES);
 

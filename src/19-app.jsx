@@ -10,6 +10,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const [replenishments, setReplenishments] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [reimbursements, setReimbursements] = useState([]);
   const [role, setRole] = useState(userRole || "Accounting");
   /* Non-admins are locked to their assigned role; admins may view-as any role. */
   useEffect(() => { setRole(userRole || "Accounting"); }, [userRole]);
@@ -81,11 +82,11 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         user: userName || (userEmail || "User"), action: "Signed Out",
         entity: userEmail || "—", remarks: "",
       }];
-      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next, documents }); } catch (e) {}
+      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next, documents, reimbursements }); } catch (e) {}
       return next;
     });
     if (onSignOut) onSignOut();
-  }, [onSignOut, userName, userEmail, funds, requests, disbursements, liquidations, replenishments]);
+  }, [onSignOut, userName, userEmail, funds, requests, disbursements, liquidations, replenishments, reimbursements]);
 
   useEffect(() => {
     (async () => {
@@ -104,6 +105,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         setReplenishments(saved.replenishments || []);
         setAuditLog(saved.auditLog || []);
         setDocuments(saved.documents || []);
+        setReimbursements(saved.reimbursements || []);
       } else {
         /* First load after this upgrade — keep master funds but clear ALL
            existing transactions so the system starts with a clean database. */
@@ -114,6 +116,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         setReplenishments([]);
         setAuditLog([]);
         setDocuments([]);
+        setReimbursements([]);
       }
       setLoaded(true);
     })();
@@ -121,8 +124,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
 
   useEffect(() => {
     if (!loaded) return;
-    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents });
-  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, loaded]);
+    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements });
+  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements, loaded]);
 
   /* ---- Requests ---- */
   const addRequest = useCallback((form) => {
@@ -184,10 +187,11 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       id: uid("dv"), voucherNo: nextVoucherNo, date: extra.date, requestId: req.id,
       employee: req.employee, branchCode: req.branchCode, department: req.department,
       expenseCategory: extra.expenseCategory, amount: extra.amount, status: "Open",
-      remarks: extra.remarks, billed: false,
+      remarks: extra.remarks, billed: false, denominations: extra.denominations || null,
     }]);
     setRequests((rs) => rs.map((r) => (r.id === req.id ? { ...r, status: "Disbursed" } : r)));
-    logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`);
+    logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`
+      + (extra.denominations && denominationSummary(extra.denominations) ? ` · denominations ${denominationSummary(extra.denominations)}` : ""));
     setDisburseTarget(null);
   }, [disburseTarget, nextVoucherNo, logAudit, disbursements, liquidations]);
 
@@ -552,6 +556,157 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     logAudit("Document " + action, (d && d.refNo) || id, remarks || (d ? d.name : ""));
   }, [documents, logAudit, userName, role]);
 
+  /* ---- Reimbursement (AF P16) ----
+     Independent of the Petty Cash Request flow: the employee already advanced
+     the expense, so no Petty Cash Advance Form is created. After approval the
+     request is handed off to Liquidation (status FOR LIQUIDATION), keeping the
+     Reimbursement Request Number as the reference, then on to Payment. */
+  const reimbTs = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+  const buildReimbFromForm = useCallback((form) => {
+    const compliance = evaluateReimbursement(form, reimbursements, form.id);
+    return {
+      employee: form.employee, department: form.department, branchCode: form.branchCode,
+      company: companyOfBranch(form.branchCode), purpose: form.purpose,
+      requestDate: form.requestDate, remarks: form.remarks || "",
+      lines: (form.lines || []).map((l) => ({ ...l, amount: Number(l.amount) || 0, account: l.account || accountForCategory(l.category) })),
+      attachments: form.attachments || [],
+      needsPO: !!form.needsPO, needsProof: !!form.needsProof,
+      hasPersonal: !!form.hasPersonal, entertainmentNotPreApproved: !!form.entertainmentNotPreApproved, hasFines: !!form.hasFines,
+      compliance,
+    };
+  }, [reimbursements]);
+
+  const nextReimbNo = () => "REIM-2026-" + String(reimbursements.length + 1).padStart(6, "0");
+
+  const addReimbursement = useCallback((form, submit) => {
+    const reimbNo = nextReimbNo();
+    const ts = reimbTs();
+    const base = buildReimbFromForm(form);
+    const status = submit ? REIMB_STATUS.SUBMITTED : REIMB_STATUS.DRAFT;
+    const history = [{ ts, user: userName || role, action: submit ? "Submitted" : "Created (Draft)", prevStatus: "", newStatus: status, comments: "" }];
+    setReimbursements((rs) => [...rs, {
+      id: uid("reimb"), reimbNo, ...base, status,
+      createdBy: userName || role, createdAt: ts,
+      submittedBy: submit ? (userName || role) : "", submittedAt: submit ? ts : "",
+      acumaticaStatus: "Not Yet Exported", payment: null, history,
+    }]);
+    logAudit(submit ? "Reimbursement Submitted" : "Reimbursement Drafted", reimbNo, `${form.employee} · ${peso(reimbTotal(base))}`);
+  }, [buildReimbFromForm, logAudit, reimbursements, userName, role]);
+
+  const updateReimbursement = useCallback((id, form, mode) => {
+    const ts = reimbTs();
+    const base = buildReimbFromForm({ ...form, id });
+    setReimbursements((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const submit = mode === "submit";
+      const status = submit ? REIMB_STATUS.SUBMITTED : (r.status === REIMB_STATUS.RETURNED ? REIMB_STATUS.DRAFT : r.status);
+      const action = submit ? (r.status === REIMB_STATUS.RETURNED ? "Resubmitted" : "Submitted") : "Edited (Draft)";
+      return {
+        ...r, ...base, status,
+        submittedBy: submit ? (userName || role) : r.submittedBy,
+        submittedAt: submit ? ts : r.submittedAt,
+        history: [...(r.history || []), { ts, user: userName || role, action, prevStatus: r.status, newStatus: status, comments: "" }],
+      };
+    }));
+    const r = reimbursements.find((x) => x.id === id);
+    logAudit(mode === "submit" ? "Reimbursement Submitted" : "Reimbursement Edited", r ? r.reimbNo : id, `${form.employee} · ${peso(reimbTotal(base))}`);
+  }, [buildReimbFromForm, logAudit, reimbursements, userName, role]);
+
+  /* Generic workflow transition with segregation-of-duties enforcement. */
+  const reimbursementAction = useCallback((id, action, payload) => {
+    const o = payload || {};
+    const ts = reimbTs();
+    const actor = userName || role;
+    setReimbursements((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      const prev = r.status;
+      let next = prev, label = action;
+      switch (action) {
+        case "recommend": next = REIMB_STATUS.FOR_APPROVAL; label = "Recommended for Approval"; break;
+        case "approve":
+          /* Segregation of duties — an employee cannot approve their own request. */
+          if ((r.createdBy || "").toLowerCase() === actor.toLowerCase() || (r.employee || "").toLowerCase() === actor.toLowerCase()) {
+            window.alert("Segregation of duties: you cannot approve your own reimbursement request.");
+            return r;
+          }
+          next = REIMB_STATUS.FOR_LIQUIDATION; label = "Approved → For Liquidation";
+          break;
+        case "return": next = REIMB_STATUS.RETURNED; label = "Returned for Revision"; break;
+        case "reject": next = REIMB_STATUS.REJECTED; label = "Rejected"; break;
+        case "liquidation-review": next = REIMB_STATUS.UNDER_REVIEW; label = "Liquidation Under Review"; break;
+        case "liquidation-complete": next = REIMB_STATUS.LIQUIDATION_DONE; label = "Liquidation Completed"; break;
+        case "for-payment": next = REIMB_STATUS.FOR_PAYMENT; label = "Moved to Payment"; break;
+        case "complete": next = REIMB_STATUS.COMPLETED; label = "Completed"; break;
+        default: return r;
+      }
+      if (next === prev) return r;
+      const patch = { status: next, history: [...(r.history || []), { ts, user: actor, action: label, prevStatus: prev, newStatus: next, comments: o.comments || "" }] };
+      if (action === "approve") { patch.approvedBy = actor; patch.approvedAt = ts; patch.liquidationRef = r.reimbNo; }
+      if (action === "recommend") { patch.reviewedBy = actor; patch.reviewedAt = ts; }
+      return { ...r, ...patch };
+    }));
+    const r = reimbursements.find((x) => x.id === id);
+    logAudit("Reimbursement " + action.replace(/-/g, " "), r ? r.reimbNo : id, o.comments || "");
+  }, [logAudit, reimbursements, userName, role]);
+
+  const recordReimbursementPayment = useCallback((id, payment) => {
+    const ts = reimbTs();
+    const actor = userName || role;
+    setReimbursements((rs) => rs.map((r) => {
+      if (r.id !== id) return r;
+      return {
+        ...r, status: REIMB_STATUS.PAID, payment: { ...payment },
+        history: [...(r.history || []), { ts, user: actor, action: "Payment Recorded", prevStatus: r.status, newStatus: REIMB_STATUS.PAID, comments: `${payment.method} · ${peso(payment.amount)}${payment.refNo ? ` · ${payment.refNo}` : ""}` }],
+      };
+    }));
+    const r = reimbursements.find((x) => x.id === id);
+    logAudit("Reimbursement Paid", r ? r.reimbNo : id, `${payment.method} · ${peso(payment.amount)}${payment.refNo ? ` · ${payment.refNo}` : ""}`
+      + (payment.denominations && denominationSummary(payment.denominations) ? ` · denominations ${denominationSummary(payment.denominations)}` : ""));
+  }, [logAudit, reimbursements, userName, role]);
+
+  const deleteReimbursement = useCallback((id) => {
+    const r = reimbursements.find((x) => x.id === id);
+    if (!r) return;
+    if (!window.confirm(`Delete reimbursement ${r.reimbNo}?\n\n${r.employee} · ${peso(reimbTotal(r))}\n\nThis cannot be undone.`)) return;
+    setReimbursements((rs) => rs.filter((x) => x.id !== id));
+    logAudit("Deleted", r.reimbNo, `Reimbursement deleted · ${r.employee} · ${peso(reimbTotal(r))}`);
+  }, [logAudit, reimbursements]);
+
+  const exportReimbursementAcumatica = useCallback((reimb) => {
+    const rows = (reimb.lines || []).map((l) => ({
+      "Branch": reimb.branchCode, "Employee": reimb.employee, "Company": companyOfBranch(reimb.branchCode),
+      "Reference No.": reimb.reimbNo, "Expense Date": l.date, "GL Account": l.account || accountForCategory(l.category),
+      "Subaccount": l.department, "Cost Center": l.costCenter || "", "Description": l.description,
+      "Category": l.category, "Vendor/Payee": l.vendor || "", "Tax Category": l.taxCategory || "", "Amount": Number(l.amount) || 0,
+    }));
+    const meta = [
+      ["Reimbursement — Acumatica Import Sheet"],
+      ["Reimbursement No.", reimb.reimbNo], ["Employee", reimb.employee],
+      ["Company", companyOfBranch(reimb.branchCode)], ["Total", reimbTotal(reimb)], [],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(meta);
+    XLSX.utils.sheet_add_json(ws, rows, { origin: -1 });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reimbursement");
+    downloadWorkbook(wb, `Reimbursement_${reimb.reimbNo}.xlsx`);
+    setReimbursements((rs) => rs.map((r) => (r.id === reimb.id ? { ...r, acumaticaStatus: "Exported" } : r)));
+    logAudit("Reimbursement Exported", reimb.reimbNo, "Acumatica export sheet generated");
+  }, [logAudit]);
+
+  const exportReimbursementReport = useCallback((list) => {
+    const rows = (list || []).map((r) => ({
+      "Reimb No.": r.reimbNo, "Employee": r.employee, "Department": deptDesc(r.department),
+      "Company": companyOfBranch(r.branchCode), "Plant": plantLabel(r.branchCode),
+      "Request Date": r.requestDate, "Lines": (r.lines || []).length, "Total Amount": reimbTotal(r),
+      "Compliance": (r.compliance && r.compliance.level) || "PASS", "Status": r.status,
+      "Approved By": r.approvedBy || "", "Payment Date": (r.payment && r.payment.date) || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reimbursements");
+    downloadWorkbook(wb, `Reimbursement_Summary_${todayISO()}.xlsx`);
+  }, []);
+
   /* ---- Plant-scoped views ---- */
   /* Every module only receives data for plants the user is allowed to see, so a
      custodian can never view or edit another plant's records. */
@@ -559,6 +714,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const visibleRequests = useMemo(() => requests.filter((r) => inScope(r.branchCode)), [requests, inScope]);
   const visibleDisbursements = useMemo(() => disbursements.filter((d) => inScope(d.branchCode)), [disbursements, inScope]);
   const visibleReplenishments = useMemo(() => replenishments.filter((r) => inScope(r.branchCode)), [replenishments, inScope]);
+  const visibleReimbursements = useMemo(() => reimbursements.filter((r) => inScope(r.branchCode)), [reimbursements, inScope]);
   const visibleLiquidations = useMemo(() => {
     const ids = new Set(visibleDisbursements.map((d) => d.id));
     return liquidations.filter((l) => ids.has(l.disbursementId));
@@ -577,6 +733,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const scopedRequests = useMemo(() => visibleRequests.filter((r) => scopeCodes.includes(r.branchCode)), [visibleRequests, scopeCodes]);
   const scopedDisbursements = useMemo(() => visibleDisbursements.filter((d) => scopeCodes.includes(d.branchCode)), [visibleDisbursements, scopeCodes]);
   const scopedReplenishments = useMemo(() => visibleReplenishments.filter((r) => scopeCodes.includes(r.branchCode)), [visibleReplenishments, scopeCodes]);
+  const scopedReimbursements = useMemo(() => visibleReimbursements.filter((r) => scopeCodes.includes(r.branchCode)), [visibleReimbursements, scopeCodes]);
   const scopedLiquidations = useMemo(() => {
     const ids = new Set(scopedDisbursements.map((d) => d.id));
     return visibleLiquidations.filter((l) => ids.has(l.disbursementId));
@@ -752,6 +909,9 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onReviewOverLiquidation={reviewOverLiquidation}
             canDelete={isSuperAdmin} onDeleteLiquidation={deleteLiquidation}
             canApproveReceipts={!!isAdmin}
+            reimbursements={scopedReimbursements}
+            onReimbursementAction={reimbursementAction}
+            canFinance={["Accounting", "Finance", "SuperAdmin"].includes(role) || !!isAdmin}
             plantOptions={scopedPlantOptions}
             plantTitle={activePlantLabel}
           />
@@ -765,6 +925,27 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onComplete={completeReplenishment} onDelete={deleteReplenishment}
             plantOptions={scopedPlantOptions} canEdit={canEdit}
             plantTitle={activePlantLabel}
+          />
+        )}
+        {activeModule === "reimbursement" && (
+          <ReimbursementTab
+            key={tab}
+            reimbursements={scopedReimbursements}
+            allReimbursements={reimbursements}
+            plantOptions={scopedPlantOptions}
+            plantTitle={activePlantLabel}
+            currentUser={userName || role}
+            canApprove={canApprove}
+            canFinance={["Accounting", "Finance", "SuperAdmin"].includes(role) || !!isAdmin}
+            canDelete={isSuperAdmin}
+            onSaveDraft={(form) => addReimbursement(form, false)}
+            onSubmit={(form) => addReimbursement(form, true)}
+            onUpdate={(id, form, mode) => updateReimbursement(id, form, mode)}
+            onAction={reimbursementAction}
+            onRecordPayment={recordReimbursementPayment}
+            onExportAcumatica={exportReimbursementAcumatica}
+            onExportReport={exportReimbursementReport}
+            onDelete={deleteReimbursement}
           />
         )}
         {activeModule === "history" && (

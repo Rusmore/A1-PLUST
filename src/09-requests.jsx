@@ -2,7 +2,7 @@
 
 function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOptions }) {
   const isEdit = !!request;
-  const defaultBranch = (plantOptions && plantOptions[0]) ? plantOptions[0].code : BRANCHES[0].code;
+  const defaultBranch = (plantOptions && plantOptions[0]) ? plantOptions[0].code : PCR_BRANCH_OPTIONS[0].code;
   const [form, setForm] = useState(
     request
       ? {
@@ -19,7 +19,7 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const isOthers = form.purpose === OTHERS_PURPOSE;
   const validPurpose = !!form.purpose && (!isOthers || form.purposeJustification.trim());
-  const valid = form.employee.trim() && validPurpose && Number(form.amount) > 0 && form.approver.trim();
+  const valid = form.employee.trim() && !!form.branchCode && validPurpose && Number(form.amount) > 0 && form.approver.trim();
 
   return (
     <div className="pcp-modal-backdrop" onClick={onClose}>
@@ -51,16 +51,13 @@ function RequestFormModal({ onClose, onSave, nextRequestNo, request, plantOption
           </div>
           <div className="pcp-field-row">
             <div className="pcp-field">
-              <label>Plant / Branch</label>
-              <select className="pcp-select" value={form.branchCode} onChange={(e) => set("branchCode", e.target.value)}>
+              <label>Plant / Branch <span style={{ color: "var(--brand)" }}>*</span></label>
+              <select className="pcp-select" value={form.branchCode} onChange={(e) => set("branchCode", e.target.value)} required>
+                <option value="">— Select Plant / Branch —</option>
                 {plantOptions ? (
                   plantOptions.map((p) => <option key={p.code} value={p.code}>{p.label} ({p.code})</option>)
                 ) : (
-                  COMPANIES.map((c) => (
-                    <optgroup label={c} key={c}>
-                      {branchesForCompany(c).map((b) => <option key={b.code} value={b.code}>{b.name} ({b.code})</option>)}
-                    </optgroup>
-                  ))
+                  PCR_BRANCH_OPTIONS.map((b) => <option key={b.code} value={b.code}>{b.label} ({b.code})</option>)
                 )}
               </select>
             </div>
