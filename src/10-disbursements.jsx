@@ -5,12 +5,6 @@ function DisburseModal({ request, onClose, onConfirm, nextVoucherNo }) {
   const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
   const [date, setDate] = useState(todayISO());
   const [remarks, setRemarks] = useState("");
-  const [denoms, setDenoms] = useState({});
-
-  /* Petty cash is released in physical cash, so the denomination breakdown must
-     reconcile to the amount before the release can be confirmed (Section 23). */
-  const denomTotal = denominationTotal(denoms);
-  const denomMatches = round2(denomTotal) === round2(Number(amount) || 0);
 
   return (
     <div className="pcp-modal-backdrop" onClick={onClose}>
@@ -50,17 +44,12 @@ function DisburseModal({ request, onClose, onConfirm, nextVoucherNo }) {
             <label>Remarks</label>
             <input className="pcp-input" value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Optional notes" />
           </div>
-          <div style={{ marginTop: 6 }}>
-            <CashDenominationEditor value={denoms} onChange={setDenoms} target={Number(amount) || 0} title="Cash Denomination Breakdown (physical cash released)" />
-          </div>
         </div>
         <div className="pcp-modal-foot">
           <button className="pcp-btn" onClick={onClose}>Cancel</button>
           <button
             className="pcp-btn pcp-btn-primary"
-            disabled={!denomMatches}
-            title={denomMatches ? "" : "The cash denomination total must match the amount disbursed."}
-            onClick={() => onConfirm({ amount: Number(amount), expenseCategory, date, remarks, denominations: denoms })}
+            onClick={() => onConfirm({ amount: Number(amount), expenseCategory, date, remarks })}
           >
             Confirm Disbursement
           </button>

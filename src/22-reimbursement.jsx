@@ -658,9 +658,6 @@ function ReimbursementDetail({ reimb, onClose, onAction, onExportAcumatica, curr
                 {fmtDate(reimb.payment.date)} · {reimb.payment.method} · {reimb.payment.refNo || "—"} · {peso(reimb.payment.amount)} · by {reimb.payment.processedBy}
                 {reimb.payment.remarks ? ` · ${reimb.payment.remarks}` : ""}
               </div>
-              {reimb.payment.denominations && denominationSummary(reimb.payment.denominations) && (
-                <div style={{ fontSize: 11.5, color: "var(--text-mut)", marginTop: 3 }}>Denominations: {denominationSummary(reimb.payment.denominations)}</div>
-              )}
             </div>
           )}
 
@@ -748,13 +745,8 @@ function ReimbursementPaymentModal({ reimb, onClose, onConfirm, processedBy }) {
   const [form, setForm] = useState({
     date: todayISO(), method: "Cash", refNo: "", amount: reimbTotal(reimb), remarks: "",
   });
-  const [denoms, setDenoms] = useState({});
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const isCash = form.method === "Cash";
-  /* Cash payments must reconcile to the denomination breakdown (Section 23);
-     Check payments do not require it. */
-  const denomMatches = !isCash || round2(denominationTotal(denoms)) === round2(Number(form.amount) || 0);
-  const valid = form.date && Number(form.amount) > 0 && (form.method !== "Check" || form.refNo.trim()) && denomMatches;
+  const valid = form.date && Number(form.amount) > 0 && (form.method !== "Check" || form.refNo.trim());
   return (
     <div className="pcp-modal-backdrop" onClick={onClose}>
       <div className="pcp-modal" onClick={(e) => e.stopPropagation()}>
@@ -777,16 +769,11 @@ function ReimbursementPaymentModal({ reimb, onClose, onConfirm, processedBy }) {
             <div className="pcp-field"><label>Payment Amount (₱)</label><input type="number" min="0" step="0.01" className="pcp-input" value={form.amount} onChange={(e) => set("amount", e.target.value)} /></div>
           </div>
           <div className="pcp-field"><label>Payment Remarks</label><input className="pcp-input" value={form.remarks} onChange={(e) => set("remarks", e.target.value)} /></div>
-          {isCash && (
-            <div style={{ marginTop: 6 }}>
-              <CashDenominationEditor value={denoms} onChange={setDenoms} target={Number(form.amount) || 0} title="Cash Denomination Breakdown (payment)" />
-            </div>
-          )}
           <div style={{ fontSize: 12, color: "var(--text-mut)" }}>Processed by {processedBy}</div>
         </div>
         <div className="pcp-modal-foot">
           <button className="pcp-btn" onClick={onClose}>Cancel</button>
-          <button className="pcp-btn pcp-btn-primary" disabled={!valid} onClick={() => onConfirm({ ...form, amount: Number(form.amount), processedBy, denominations: isCash ? denoms : null })}>Confirm Payment</button>
+          <button className="pcp-btn pcp-btn-primary" disabled={!valid} onClick={() => onConfirm({ ...form, amount: Number(form.amount), processedBy })}>Confirm Payment</button>
         </div>
       </div>
     </div>

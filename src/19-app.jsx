@@ -187,11 +187,10 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       id: uid("dv"), voucherNo: nextVoucherNo, date: extra.date, requestId: req.id,
       employee: req.employee, branchCode: req.branchCode, department: req.department,
       expenseCategory: extra.expenseCategory, amount: extra.amount, status: "Open",
-      remarks: extra.remarks, billed: false, denominations: extra.denominations || null,
+      remarks: extra.remarks, billed: false,
     }]);
     setRequests((rs) => rs.map((r) => (r.id === req.id ? { ...r, status: "Disbursed" } : r)));
-    logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`
-      + (extra.denominations && denominationSummary(extra.denominations) ? ` · denominations ${denominationSummary(extra.denominations)}` : ""));
+    logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`);
     setDisburseTarget(null);
   }, [disburseTarget, nextVoucherNo, logAudit, disbursements, liquidations]);
 
@@ -660,8 +659,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       };
     }));
     const r = reimbursements.find((x) => x.id === id);
-    logAudit("Reimbursement Paid", r ? r.reimbNo : id, `${payment.method} · ${peso(payment.amount)}${payment.refNo ? ` · ${payment.refNo}` : ""}`
-      + (payment.denominations && denominationSummary(payment.denominations) ? ` · denominations ${denominationSummary(payment.denominations)}` : ""));
+    logAudit("Reimbursement Paid", r ? r.reimbNo : id, `${payment.method} · ${peso(payment.amount)}${payment.refNo ? ` · ${payment.refNo}` : ""}`);
   }, [logAudit, reimbursements, userName, role]);
 
   const deleteReimbursement = useCallback((id) => {

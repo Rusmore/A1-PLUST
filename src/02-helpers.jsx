@@ -23,24 +23,6 @@ const fmtDate = (iso) => {
 
 const uid = (prefix) => prefix + "-" + Math.random().toString(36).slice(2, 9).toUpperCase();
 
-/* ============================= CASH DENOMINATION (Section 23) ============================= */
-
-/* Standard Philippine peso denominations, largest first. */
-const PESO_DENOMINATIONS = [1000, 500, 200, 100, 50, 20, 10, 5, 1];
-
-/* Sum of (denomination x quantity) from a { denom: qty } map. */
-function denominationTotal(counts) {
-  return PESO_DENOMINATIONS.reduce((s, d) => s + d * (Number((counts || {})[d]) || 0), 0);
-}
-
-/* Human-readable breakdown for audit remarks, e.g. "2x1000, 1x500". */
-function denominationSummary(counts) {
-  return PESO_DENOMINATIONS
-    .filter((d) => Number((counts || {})[d]) > 0)
-    .map((d) => `${Number(counts[d])}x${d}`)
-    .join(", ");
-}
-
 const branchByCode = (code) => BRANCHES.find((b) => b.code === code);
 const companyOfBranch = (code) => branchByCode(code)?.company || "—";
 const subaccountLabel = (code) => {
