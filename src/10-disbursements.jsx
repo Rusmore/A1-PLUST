@@ -6,19 +6,11 @@ function DisburseModal({ request, onClose, onConfirm, nextVoucherNo }) {
   const [date, setDate] = useState(todayISO());
   const [remarks, setRemarks] = useState("");
   const [denoms, setDenoms] = useState({});
-  const [receivedBy, setReceivedBy] = useState(request.employee || "");
-  const [acknowledged, setAcknowledged] = useState(false);
 
   /* Petty cash is released in physical cash, so the denomination breakdown must
      reconcile to the amount before the release can be confirmed (Section 23). */
-  const approved = Number(request.amount) || 0;
-  const released = Number(amount) || 0;
   const denomTotal = denominationTotal(denoms);
-  const denomMatches = round2(denomTotal) === round2(released);
-  /* Cash Release Control (Section 22): never release more than the approved
-     amount, and require the recipient's acknowledgment of the actual cash. */
-  const exceedsApproved = round2(released) > round2(approved);
-  const canConfirm = denomMatches && !exceedsApproved && released > 0 && receivedBy.trim() && acknowledged;
+  const denomMatches = round2(denomTotal) === round2(Number(amount) || 0);
 
   return (
     <div className="pcp-modal-backdrop" onClick={onClose}>
@@ -31,7 +23,6 @@ function DisburseModal({ request, onClose, onConfirm, nextVoucherNo }) {
           <div style={{ background: "var(--paper)", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12.5 }}>
             <div><strong>{request.requestNo}</strong> — {request.employee}</div>
             <div style={{ color: "var(--text-mut)", marginTop: 3 }}>{request.purpose}</div>
-            <div style={{ color: "var(--text-mut)", marginTop: 3 }}>Approved amount: <strong>{peso(approved)}</strong></div>
           </div>
           <div className="pcp-field-row">
             <div className="pcp-field">
@@ -45,13 +36,8 @@ function DisburseModal({ request, onClose, onConfirm, nextVoucherNo }) {
           </div>
           <div className="pcp-field-row">
             <div className="pcp-field">
-              <label>Actual Cash Released (₱)</label>
+              <label>Amount Disbursed (₱)</label>
               <input type="number" className="pcp-input" value={amount} onChange={(e) => setAmount(e.target.value)} />
-              {exceedsApproved && (
-                <div style={{ fontSize: 11, color: "var(--brand)", marginTop: 4 }}>
-                  <AlertTriangle size={11} style={{ verticalAlign: "-1px" }} /> Cannot exceed the approved amount of {peso(approved)}.
-                </div>
-              )}
             </div>
             <div className="pcp-field">
               <label>Expense Category (anticipated)</label>
@@ -61,28 +47,20 @@ function DisburseModal({ request, onClose, onConfirm, nextVoucherNo }) {
             </div>
           </div>
           <div className="pcp-field">
-            <label>Cash Received By</label>
-            <input className="pcp-input" value={receivedBy} onChange={(e) => setReceivedBy(e.target.value)} placeholder="Name of person acknowledging receipt" />
-          </div>
-          <div className="pcp-field">
             <label>Remarks</label>
             <input className="pcp-input" value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Optional notes" />
           </div>
           <div style={{ marginTop: 6 }}>
             <CashDenominationEditor value={denoms} onChange={setDenoms} target={Number(amount) || 0} title="Cash Denomination Breakdown (physical cash released)" />
           </div>
-          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12, fontSize: 12.5, cursor: "pointer" }}>
-            <input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} style={{ marginTop: 2 }} />
-            <span>I, <strong>{receivedBy || "the recipient"}</strong>, acknowledge receipt of the actual cash of <strong>{peso(released)}</strong> in the denominations recorded above.</span>
-          </label>
         </div>
         <div className="pcp-modal-foot">
           <button className="pcp-btn" onClick={onClose}>Cancel</button>
           <button
             className="pcp-btn pcp-btn-primary"
-            disabled={!canConfirm}
-            title={canConfirm ? "" : "Match the denomination total, stay within the approved amount, name the recipient and confirm acknowledgment."}
-            onClick={() => onConfirm({ amount: Number(amount), expenseCategory, date, remarks, denominations: denoms, receivedBy: receivedBy.trim(), acknowledged })}
+            disabled={!denomMatches}
+            title={denomMatches ? "" : "The cash denomination total must match the amount disbursed."}
+            onClick={() => onConfirm({ amount: Number(amount), expenseCategory, date, remarks, denominations: denoms })}
           >
             Confirm Disbursement
           </button>
@@ -182,7 +160,7 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
     let list = disbursements.map((d) => ({ ...d, liqStatus: liqStatusFor(d, liquidations) }));
     if (search) {
       const s = search.toLowerCase();
-      list = list.filter((d) => d.voucherNo.toLowerCase().includes(s) || d.employee.toLowerCase().includes(s) || (d.pcfNo || "").toLowerCase().includes(s));
+      list = list.filter((d) => d.voucherNo.toLowerCase().includes(s) || d.employee.toLowerCase().includes(s));
     }
     if (branchFilter !== "All") list = list.filter((d) => d.branchCode === branchFilter);
     if (statusFilter !== "All") list = list.filter((d) => d.liqStatus === statusFilter);
@@ -202,7 +180,7 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
 
   const exportLedger = () => {
     const data = rows.map((d) => ({
-      "Voucher No.": d.voucherNo, "PCF Ref": d.pcfNo || "", "Date": d.date, "Employee": d.employee,
+      "Voucher No.": d.voucherNo, "Date": d.date, "Employee": d.employee,
       "Branch": d.branchCode, "Company": companyOfBranch(d.branchCode),
       "Department": subaccountLabel(d.department), "Expense Category": d.expenseCategory,
       "Amount": d.amount, "Status": d.status, "Liquidation Status": d.liqStatus, "Remarks": d.remarks || "",
@@ -253,7 +231,6 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
               <thead>
                 <tr>
                   <Th field="voucherNo">Voucher No.</Th>
-                  <th>PCF Ref</th>
                   <Th field="date">Date</Th>
                   <Th field="employee">Employee</Th>
                   <Th field="branchCode">Branch</Th>
@@ -266,7 +243,6 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
                 {rows.length ? rows.map((d) => (
                   <tr key={d.id}>
                     <td>{d.voucherNo}</td>
-                    <td style={{ fontSize: 11.5, color: "var(--text-mut)" }}>{d.pcfNo || "—"}</td>
                     <td>{fmtDate(d.date)}</td>
                     <td>{d.employee}</td>
                     <td>{d.branchCode}</td>
@@ -306,7 +282,7 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
                       </div>
                     </td>
                   </tr>
-                )) : <tr><td colSpan={13} className="pcp-empty">No disbursements match your filters</td></tr>}
+                )) : <tr><td colSpan={12} className="pcp-empty">No disbursements match your filters</td></tr>}
               </tbody>
             </table>
           </div>

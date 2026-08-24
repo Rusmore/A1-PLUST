@@ -480,7 +480,6 @@ const PLANT_MODULES = [
   { key: "liquidation", label: "Liquidation", icon: FileSpreadsheet },
   { key: "reimbursement", label: "Reimbursement", icon: ArrowLeftRight },
   { key: "replenishment", label: "Replenishment", icon: RefreshCw },
-  { key: "cash", label: "Cash Management", icon: Banknote },
   { key: "history", label: "Transaction History", icon: History },
   { key: "report", label: "Reports", icon: FileText },
 ];
@@ -679,8 +678,6 @@ function Badge({ status }) {
     /* Acumatica export states */
     "Not Yet Exported": "gray", "Ready for Acumatica": "amber", Exported: "blue",
     Posted: "green", "Posting Error": "red",
-    /* Cash management states (Sections 24–27) */
-    BALANCED: "green", "CASH OVER": "amber", "CASH SHORT": "red",
   };
   const cls = map[status] || "gray";
   return <span className={`pcp-badge pcp-badge-${cls}`}>{status}</span>;

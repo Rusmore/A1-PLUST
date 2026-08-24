@@ -11,12 +11,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const [auditLog, setAuditLog] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [reimbursements, setReimbursements] = useState([]);
-  const [cashCounts, setCashCounts] = useState([]);
-  const [cashReturns, setCashReturns] = useState([]);
-  const [pcfSeq, setPcfSeq] = useState(1);
-  /* Ref mirrors the running PCF sequence so multiple numbers can be minted
-     synchronously within one handler without waiting for a state flush. */
-  const pcfSeqRef = useRef(1);
   const [role, setRole] = useState(userRole || "Accounting");
   /* Non-admins are locked to their assigned role; admins may view-as any role. */
   useEffect(() => { setRole(userRole || "Accounting"); }, [userRole]);
@@ -69,15 +63,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     }]);
   }, [role, userName]);
 
-  /* Mint the next unique PCF transaction number (Section 26). Sequential and
-     never reused — the counter only ever moves forward and is persisted. */
-  const mintPcfNo = useCallback(() => {
-    const n = pcfSeqRef.current;
-    pcfSeqRef.current = n + 1;
-    setPcfSeq(n + 1);
-    return formatPcfNo(n);
-  }, []);
-
   /* Record sign-in once per session, and sign-out via a wrapped handler. */
   const loginLoggedRef = useRef(false);
   useEffect(() => {
@@ -97,7 +82,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         user: userName || (userEmail || "User"), action: "Signed Out",
         entity: userEmail || "—", remarks: "",
       }];
-      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next, documents, reimbursements, cashCounts, cashReturns, pcfSeq }); } catch (e) {}
+      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next, documents, reimbursements }); } catch (e) {}
       return next;
     });
     if (onSignOut) onSignOut();
@@ -121,10 +106,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         setAuditLog(saved.auditLog || []);
         setDocuments(saved.documents || []);
         setReimbursements(saved.reimbursements || []);
-        setCashCounts(saved.cashCounts || []);
-        setCashReturns(saved.cashReturns || []);
-        const seq = Number(saved.pcfSeq) || 1;
-        pcfSeqRef.current = seq; setPcfSeq(seq);
       } else {
         /* First load after this upgrade — keep master funds but clear ALL
            existing transactions so the system starts with a clean database. */
@@ -136,9 +117,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         setAuditLog([]);
         setDocuments([]);
         setReimbursements([]);
-        setCashCounts([]);
-        setCashReturns([]);
-        pcfSeqRef.current = 1; setPcfSeq(1);
       }
       setLoaded(true);
     })();
@@ -146,8 +124,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
 
   useEffect(() => {
     if (!loaded) return;
-    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements, cashCounts, cashReturns, pcfSeq });
-  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements, cashCounts, cashReturns, pcfSeq, loaded]);
+    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements });
+  }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements, loaded]);
 
   /* ---- Requests ---- */
   const addRequest = useCallback((form) => {
@@ -206,18 +184,16 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       return;
     }
     setDisbursements((ds) => [...ds, {
-      id: uid("dv"), voucherNo: nextVoucherNo, pcfNo: mintPcfNo(), date: extra.date, requestId: req.id,
+      id: uid("dv"), voucherNo: nextVoucherNo, date: extra.date, requestId: req.id,
       employee: req.employee, branchCode: req.branchCode, department: req.department,
-      expenseCategory: extra.expenseCategory, amount: extra.amount, approvedAmount: Number(req.amount) || extra.amount,
-      status: "Open", remarks: extra.remarks, billed: false, denominations: extra.denominations || null,
-      receivedBy: extra.receivedBy || "", acknowledgedAt: extra.acknowledged ? new Date().toISOString().slice(0, 19) : "",
+      expenseCategory: extra.expenseCategory, amount: extra.amount, status: "Open",
+      remarks: extra.remarks, billed: false, denominations: extra.denominations || null,
     }]);
     setRequests((rs) => rs.map((r) => (r.id === req.id ? { ...r, status: "Disbursed" } : r)));
     logAudit("Released", nextVoucherNo, `Cash released to ${req.employee} · ${peso(extra.amount)}`
-      + (extra.receivedBy ? ` · received by ${extra.receivedBy}` : "")
       + (extra.denominations && denominationSummary(extra.denominations) ? ` · denominations ${denominationSummary(extra.denominations)}` : ""));
     setDisburseTarget(null);
-  }, [disburseTarget, nextVoucherNo, logAudit, disbursements, liquidations, mintPcfNo]);
+  }, [disburseTarget, nextVoucherNo, logAudit, disbursements, liquidations]);
 
   const updateRemarks = useCallback((id, remarks) => {
     setDisbursements((ds) => ds.map((d) => (d.id === id ? { ...d, remarks } : d)));
@@ -492,38 +468,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     logAudit("Deleted", r ? r.replenishmentNo : id, "Replenishment record removed");
   }, [logAudit, replenishments]);
 
-  /* ---- Cash Management (Sections 24, 25, 27) ---- */
-  const addCashCount = useCallback((form) => {
-    const pcfNo = mintPcfNo();
-    setCashCounts((cs) => [...cs, { id: uid("cc"), pcfNo, ...form }]);
-    logAudit("Physical Cash Count", pcfNo,
-      `${plantLabel(form.branchCode)} · expected ${peso(form.expectedCash)} · actual ${peso(form.actualCash)}`
-      + (form.variance === 0 ? " · BALANCED" : ` · ${form.variance > 0 ? "CASH OVER" : "CASH SHORT"} ${peso(Math.abs(form.variance))} · FOR REVIEW`)
-      + (form.denominations && denominationSummary(form.denominations) ? ` · denominations ${denominationSummary(form.denominations)}` : ""));
-  }, [logAudit, mintPcfNo]);
-
-  const deleteCashCount = useCallback((id) => {
-    const c = cashCounts.find((x) => x.id === id);
-    setCashCounts((cs) => cs.filter((x) => x.id !== id));
-    logAudit("Deleted", c ? c.pcfNo : id, "Physical cash count removed");
-  }, [logAudit, cashCounts]);
-
-  /* Returned unused cash automatically increases the assigned PCF's available
-     physical cash and is tied back to the original release voucher. */
-  const returnCash = useCallback((form) => {
-    const pcfNo = mintPcfNo();
-    setCashReturns((rs) => [...rs, { id: uid("cr"), pcfNo, ...form }]);
-    logAudit("Cash Returned", pcfNo,
-      `${form.employee} returned ${peso(form.amount)} of ${peso(form.released)} (voucher ${form.voucherNo}) · received by ${form.receivedBy}`
-      + (form.denominations && denominationSummary(form.denominations) ? ` · denominations ${denominationSummary(form.denominations)}` : ""));
-  }, [logAudit, mintPcfNo]);
-
-  const deleteCashReturn = useCallback((id) => {
-    const r = cashReturns.find((x) => x.id === id);
-    setCashReturns((rs) => rs.filter((x) => x.id !== id));
-    logAudit("Deleted", r ? r.pcfNo : id, "Cash return record removed");
-  }, [logAudit, cashReturns]);
-
   const exportLiquidation = useCallback((disbursement, liq) => {
     const rows = buildLiquidationExportRows(disbursement, liq);
     const meta = [
@@ -790,8 +734,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const scopedDisbursements = useMemo(() => visibleDisbursements.filter((d) => scopeCodes.includes(d.branchCode)), [visibleDisbursements, scopeCodes]);
   const scopedReplenishments = useMemo(() => visibleReplenishments.filter((r) => scopeCodes.includes(r.branchCode)), [visibleReplenishments, scopeCodes]);
   const scopedReimbursements = useMemo(() => visibleReimbursements.filter((r) => scopeCodes.includes(r.branchCode)), [visibleReimbursements, scopeCodes]);
-  const scopedCashCounts = useMemo(() => cashCounts.filter((c) => scopeCodes.includes(c.branchCode)), [cashCounts, scopeCodes]);
-  const scopedCashReturns = useMemo(() => cashReturns.filter((c) => scopeCodes.includes(c.branchCode)), [cashReturns, scopeCodes]);
   const scopedLiquidations = useMemo(() => {
     const ids = new Set(scopedDisbursements.map((d) => d.id));
     return visibleLiquidations.filter((l) => ids.has(l.disbursementId));
@@ -1013,17 +955,6 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             liquidations={scopedLiquidations} replenishments={scopedReplenishments}
             initialFilter={historyFilter} plantOptions={scopedPlantOptions}
             plantTitle={activePlantLabel}
-          />
-        )}
-        {activeModule === "cash" && (
-          <CashManagementTab
-            key={tab}
-            funds={scopedFunds} disbursements={scopedDisbursements} liquidations={scopedLiquidations}
-            replenishments={scopedReplenishments} cashCounts={scopedCashCounts} cashReturns={scopedCashReturns}
-            onAddCashCount={addCashCount} onReturnCash={returnCash}
-            onDeleteCashCount={deleteCashCount} onDeleteCashReturn={deleteCashReturn}
-            plantOptions={scopedPlantOptions} plantTitle={activePlantLabel}
-            userName={userName || role} canDelete={isSuperAdmin}
           />
         )}
         {activeModule === "report" && (
