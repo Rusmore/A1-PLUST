@@ -98,7 +98,7 @@ function UserManagementTab({ currentEmail, onChangePassword }) {
   );
 }
 
-function SystemSettingsTab({ userName, userEmail, role, plants }) {
+function SystemSettingsTab({ userName, userEmail, role, plants, requests, disbursements, liquidations, replenishments, onRestore, isAdmin }) {
   const cloud = !!(window.PCP_AUTH && window.PCP_AUTH.enabled);
   const plantsLabel = (plants && plants.length) ? plants.map(plantLabel).join(", ") : "All plants";
   return (
@@ -125,6 +125,165 @@ function SystemSettingsTab({ userName, userEmail, role, plants }) {
             </tbody></table>
           </div>
         </div>
+        {isAdmin && (
+          <DataIntegrityPanel
+            requests={requests} disbursements={disbursements}
+            liquidations={liquidations} replenishments={replenishments}
+            onRestore={onRestore}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---- Data Integrity, Reconciliation & Recovery (admin only) ----
+   Surfaces the cross-module reconciliation report, flags orphans/duplicates and
+   lets an administrator take a manual backup or restore an earlier snapshot.
+   This is the operator-facing side of the automatic backup system that protects
+   completed financial records from ever disappearing. */
+function DataIntegrityPanel({ requests, disbursements, liquidations, replenishments, onRestore }) {
+  const report = useMemo(
+    () => buildIntegrityReport(requests, disbursements, liquidations, replenishments),
+    [requests, disbursements, liquidations, replenishments]
+  );
+  const [backups, setBackups] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const refreshBackups = useCallback(async () => {
+    try { setBackups(await listBackups()); } catch (e) { /* ignore */ }
+  }, []);
+  useEffect(() => { refreshBackups(); }, [refreshBackups]);
+
+  const doBackup = async () => {
+    setBusy("backup"); setMsg("");
+    const key = await backupState({
+      dataVersion: DATA_VERSION, requests, disbursements, liquidations, replenishments,
+    }, "manual");
+    setMsg(key ? "Backup created." : "Nothing to back up (no transactions).");
+    await refreshBackups();
+    setBusy("");
+  };
+
+  const doRestore = async (key, txCount) => {
+    if (!window.confirm(
+      `Restore snapshot with ${txCount} transaction(s)?\n\n`
+      + "This replaces the current in-memory records with the snapshot. A safety "
+      + "backup of the current state is taken first. Continue?"
+    )) return;
+    setBusy(key); setMsg("");
+    try {
+      await backupState({ dataVersion: DATA_VERSION, requests, disbursements, liquidations, replenishments }, "pre-restore");
+      const snap = await readBackup(key);
+      if (snap && onRestore) { onRestore(migrateState(snap)); setMsg("Snapshot restored."); }
+      else setMsg("Could not read snapshot.");
+    } catch (e) { setMsg("Restore failed."); }
+    await refreshBackups();
+    setBusy("");
+  };
+
+  const exportReconciliation = () => {
+    const rows = report.rows.map((r) => ({
+      Transaction: r.ref,
+      Request: r.request ? "✓" : "✗",
+      Release: r.release ? "✓" : "✗",
+      Liquidation: r.liquidation ? "✓" : "✗",
+      Replenishment: r.replenishment ? "✓" : "—",
+      Status: r.status,
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Transaction: "(no requests)" }]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reconciliation");
+    downloadWorkbook(wb, `PCF_Reconciliation_${todayISO()}.xlsx`);
+  };
+
+  const c = report.counts;
+  const flag = (arr) => (arr && arr.length ? arr.join(", ") : "None");
+
+  return (
+    <div className="pcp-card pcp-card-pad" style={{ marginTop: 16 }}>
+      <div className="pcp-section-title"><Database size={15} color="#c8102e" /> Data Integrity, Reconciliation & Recovery</div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "6px 0 14px" }}>
+        <button className="pcp-btn" onClick={doBackup} disabled={busy === "backup"}>
+          <Archive size={14} /> {busy === "backup" ? "Backing up…" : "Backup now"}
+        </button>
+        <button className="pcp-btn" onClick={exportReconciliation}><Download size={14} /> Export reconciliation</button>
+        <button className="pcp-btn" onClick={refreshBackups}><RefreshCw size={14} /> Refresh</button>
+      </div>
+      {msg && <div className="pcp-login-ok" style={{ marginBottom: 12 }}>{msg}</div>}
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 14, fontSize: 13 }}>
+        <span><strong>{c.requests}</strong> requests</span>
+        <span><strong>{c.disbursements}</strong> releases</span>
+        <span><strong>{c.liquidations}</strong> liquidations</span>
+        <span><strong>{c.replenishments}</strong> replenishments</span>
+        <span style={{ color: "#127a3e" }}><strong>{c.complete}</strong> complete</span>
+        <span style={{ color: "#b45309" }}><strong>{c.missingRelease}</strong> missing release</span>
+        <span style={{ color: "#b45309" }}><strong>{c.missingLiquidation}</strong> missing liquidation</span>
+      </div>
+
+      <div style={{
+        padding: "10px 12px", borderRadius: 8, marginBottom: 14, fontSize: 12.5,
+        background: report.healthy ? "#effaf1" : "#fef3f2",
+        border: "1px solid " + (report.healthy ? "#b7e4c7" : "#f5c2c0"),
+        color: report.healthy ? "#127a3e" : "#b42318",
+      }}>
+        {report.healthy ? "No integrity problems detected — all relationships intact, no orphans or duplicates." : "Integrity issues detected — review the flags below."}
+        {!report.healthy && (
+          <ul style={{ margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+            <li>Orphaned releases (no parent request): {flag(report.orphanDisbursements)}</li>
+            <li>Orphaned liquidations (no parent release): {flag(report.orphanLiquidations)}</li>
+            <li>Duplicate request numbers: {flag(report.duplicateRequestNos)}</li>
+            <li>Duplicate voucher numbers: {flag(report.duplicateVoucherNos)}</li>
+            <li>Duplicate replenishment numbers: {flag(report.duplicateReplenishmentNos)}</li>
+            <li>Releases with more than one liquidation: {flag(report.duplicateLiquidations)}</li>
+          </ul>
+        )}
+      </div>
+
+      <div className="pcp-table-wrap" style={{ maxHeight: 280, overflow: "auto", marginBottom: 16 }}>
+        <table className="pcp-table">
+          <thead><tr><th>Transaction</th><th>Request</th><th>Release</th><th>Liquidation</th><th>Replenishment</th><th>Status</th></tr></thead>
+          <tbody>
+            {report.rows.length ? report.rows.map((r) => (
+              <tr key={r.ref}>
+                <td style={{ fontWeight: 600 }}>{r.ref}</td>
+                <td>{r.request ? "✓" : "✗"}</td>
+                <td>{r.release ? "✓" : "✗"}</td>
+                <td>{r.liquidation ? "✓" : "✗"}</td>
+                <td>{r.replenishment ? "✓" : "—"}</td>
+                <td>{r.status}</td>
+              </tr>
+            )) : <tr><td colSpan={6} className="pcp-empty">No requests recorded yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="pcp-section-title" style={{ fontSize: 13 }}><ArchiveRestore size={14} color="#c8102e" /> Recovery snapshots</div>
+      <div className="pcp-table-wrap" style={{ maxHeight: 240, overflow: "auto" }}>
+        <table className="pcp-table">
+          <thead><tr><th>Taken</th><th>Transactions</th><th>Tag</th><th></th></tr></thead>
+          <tbody>
+            {backups.length ? backups.map((b) => (
+              <tr key={b.key}>
+                <td>{b.at ? new Date(b.at).toLocaleString() : "—"}</td>
+                <td>{b.txCount}</td>
+                <td>{b.tag || "—"}</td>
+                <td style={{ textAlign: "right" }}>
+                  <button className="pcp-btn pcp-btn-sm" onClick={() => doRestore(b.key, b.txCount)} disabled={busy === b.key}>
+                    <ArchiveRestore size={13} /> {busy === b.key ? "Restoring…" : "Restore"}
+                  </button>
+                </td>
+              </tr>
+            )) : <tr><td colSpan={4} className="pcp-empty">No snapshots yet. A snapshot is taken automatically at each load.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-mut)", lineHeight: 1.6 }}>
+        Snapshots are stored in the shared database and this browser. The system also keeps a snapshot automatically
+        every time the portal loads, and never overwrites existing history with an empty database.
       </div>
     </div>
   );

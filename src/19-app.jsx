@@ -97,33 +97,47 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         seedFunds().forEach((sf) => { if (!list.some((f) => f.branchCode === sf.branchCode)) list.push(sf); });
         return list;
       };
-      if (saved && saved.dataVersion === DATA_VERSION) {
-        setFunds(ensureFunds(saved.funds));
-        setRequests(saved.requests || []);
-        setDisbursements(saved.disbursements || []);
-        setLiquidations(saved.liquidations || []);
-        setReplenishments(saved.replenishments || []);
-        setAuditLog(saved.auditLog || []);
-        setDocuments(saved.documents || []);
-        setReimbursements(saved.reimbursements || []);
-      } else {
-        /* First load after this upgrade — keep master funds but clear ALL
-           existing transactions so the system starts with a clean database. */
-        setFunds(ensureFunds(saved && saved.funds));
-        setRequests([]);
-        setDisbursements([]);
-        setLiquidations([]);
-        setReplenishments([]);
-        setAuditLog([]);
-        setDocuments([]);
-        setReimbursements([]);
-      }
+
+      /* CRITICAL: transactions are NEVER wiped on load. Whatever was previously
+         saved is migrated forward verbatim (IDs, reference numbers and links
+         preserved), regardless of the stored dataVersion. A version mismatch is
+         a schema tag only — completed financial records must always survive an
+         upgrade. (Previously a mismatch cleared every transaction, which is what
+         made past records disappear after a deployment.) */
+      const migrated = migrateState(saved);
+
+      /* Before touching the live record, snapshot whatever we found so any
+         future incident is recoverable. */
+      if (txnCount(migrated) > 0) { try { await backupState(migrated, "auto:on-load"); } catch (e) { /* best effort */ } }
+
+      /* Self-healing: if the live record somehow came back emptier than a known
+         backup (e.g. a prior bad wipe already ran), restore the richest copy. */
+      let source = migrated;
+      try {
+        if (txnCount(migrated) === 0) {
+          const best = await recoverBestState();
+          if (best && best.txCount > 0) source = migrateState(best.state);
+        }
+      } catch (e) { /* best effort */ }
+
+      setFunds(ensureFunds(source.funds));
+      setRequests(source.requests || []);
+      setDisbursements(source.disbursements || []);
+      setLiquidations(source.liquidations || []);
+      setReplenishments(source.replenishments || []);
+      setAuditLog(source.auditLog || []);
+      setDocuments(source.documents || []);
+      setReimbursements(source.reimbursements || []);
       setLoaded(true);
     })();
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
+    /* Safe to persist: the load path above never empties an existing database,
+       so this write mirrors real state (including intentional edits/deletes)
+       rather than a wipe. Automatic on-load snapshots provide the rollback path
+       if a write ever needs to be undone. */
     saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements });
   }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements, loaded]);
 
@@ -509,6 +523,22 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     const map = new Map(updates.map((u) => [u.id, u.beginningBalance]));
     setFunds((fs) => fs.map((x) => (map.has(x.id) ? { ...x, beginningBalance: map.get(x.id) } : x)));
   }, []);
+
+  /* Restore a recovery snapshot (admin, from System Settings). Transactions are
+     replaced wholesale from the snapshot; funds/audit are only replaced when the
+     snapshot actually carries them, so a partial snapshot never blanks them. */
+  const restoreState = useCallback((snap) => {
+    if (!snap) return;
+    if (Array.isArray(snap.requests)) setRequests(snap.requests);
+    if (Array.isArray(snap.disbursements)) setDisbursements(snap.disbursements);
+    if (Array.isArray(snap.liquidations)) setLiquidations(snap.liquidations);
+    if (Array.isArray(snap.replenishments)) setReplenishments(snap.replenishments);
+    if (Array.isArray(snap.documents)) setDocuments(snap.documents);
+    if (Array.isArray(snap.reimbursements)) setReimbursements(snap.reimbursements);
+    if (Array.isArray(snap.funds) && snap.funds.length) setFunds(snap.funds);
+    logAudit("Data Restored", "recovery snapshot",
+      `${(snap.requests || []).length} request(s), ${(snap.disbursements || []).length} release(s), ${(snap.liquidations || []).length} liquidation(s) restored`);
+  }, [logAudit]);
 
   /* ---- PCF Documents ---- */
   const docTs = () => new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -989,7 +1019,13 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
           <UserManagementTab currentEmail={userEmail} onChangePassword={() => setShowChangePw(true)} />
         )}
         {activeModule === "settings" && (
-          <SystemSettingsTab userName={userName} userEmail={userEmail} role={role} plants={allowedPlants} />
+          <SystemSettingsTab
+            userName={userName} userEmail={userEmail} role={role} plants={allowedPlants}
+            isAdmin={isAdmin}
+            requests={requests} disbursements={disbursements}
+            liquidations={liquidations} replenishments={replenishments}
+            onRestore={restoreState}
+          />
         )}
       </div>
 

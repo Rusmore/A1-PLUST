@@ -60,10 +60,26 @@ const seedReplenishments = () => ([]);
 const seedAuditLog = () => ([]);
 
 const STORAGE_KEY = "petty-cash-portal-state";
-/* Bump this whenever transaction data must be wiped for a clean start on
-   already-deployed databases. Loading a state with an older version keeps the
-   master data (funds) but clears all recorded transactions. */
+/* Schema tag written into every saved blob. This is now ONLY metadata: a
+   version mismatch NEVER discards transactions — historical financial records
+   are always preserved and migrated forward (see migrateState). */
 const DATA_VERSION = "2026-clean-1";
+
+/* Keys used by the automatic backup / recovery system. Every load takes a
+   timestamped snapshot BEFORE the app touches the live record, so a bad
+   deployment or accidental wipe can always be rolled back. */
+const BACKUP_PREFIX = "petty-cash-portal-backup-";
+const BACKUP_INDEX_KEY = "petty-cash-portal-backups";
+const MAX_BACKUPS = 12;
+
+/* The transaction stores whose loss would destroy financial history. Used to
+   count records so backups/guards can tell a real database from an empty one. */
+const TXN_KEYS = ["requests", "disbursements", "liquidations", "replenishments", "documents", "reimbursements"];
+
+function txnCount(state) {
+  if (!state || typeof state !== "object") return 0;
+  return TXN_KEYS.reduce((n, k) => n + (Array.isArray(state[k]) ? state[k].length : 0), 0);
+}
 
 async function loadState() {
   try {
@@ -77,6 +93,160 @@ async function saveState(state) {
   try {
     await window.storage.set(STORAGE_KEY, JSON.stringify(state), false);
   } catch (e) { /* best effort */ }
+}
+
+/* ---- Forward-only migration ----
+   Normalizes any previously-saved blob (regardless of its dataVersion) into the
+   current shape WITHOUT dropping a single transaction. Missing arrays default to
+   empty; existing arrays are carried over verbatim so IDs, reference numbers and
+   relationships are preserved exactly. */
+function migrateState(saved) {
+  const arr = (v) => (Array.isArray(v) ? v : []);
+  const out = {
+    dataVersion: DATA_VERSION,
+    funds: arr(saved && saved.funds),
+    requests: arr(saved && saved.requests),
+    disbursements: arr(saved && saved.disbursements),
+    liquidations: arr(saved && saved.liquidations),
+    replenishments: arr(saved && saved.replenishments),
+    auditLog: arr(saved && saved.auditLog),
+    documents: arr(saved && saved.documents),
+    reimbursements: arr(saved && saved.reimbursements),
+  };
+  out._prevVersion = (saved && saved.dataVersion) || null;
+  out._migrated = !!saved && saved.dataVersion !== DATA_VERSION;
+  return out;
+}
+
+/* ---- Automatic backups ----
+   Snapshots a non-empty state under a timestamped key and keeps a pruned index.
+   Empty states are never snapshotted, so a backup can never overwrite good
+   history with nothing. */
+async function backupState(state, tag) {
+  try {
+    const count = txnCount(state);
+    if (count === 0) return null; // never back up an empty database
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const key = BACKUP_PREFIX + stamp;
+    const snapshot = { ...state, _backupAt: new Date().toISOString(), _txCount: count, _tag: tag || "" };
+    await window.storage.set(key, JSON.stringify(snapshot), false);
+
+    let index = [];
+    try { const r = await window.storage.get(BACKUP_INDEX_KEY, false); if (r && r.value) index = JSON.parse(r.value); } catch (e) { /* fresh index */ }
+    index = index.filter((b) => b && b.key !== key);
+    index.push({ key, at: snapshot._backupAt, txCount: count, tag: tag || "" });
+    while (index.length > MAX_BACKUPS) {
+      const old = index.shift();
+      try { await window.storage.set(old.key, "", false); } catch (e) { /* best effort */ }
+      try { localStorage.removeItem(old.key); } catch (e) { /* best effort */ }
+    }
+    await window.storage.set(BACKUP_INDEX_KEY, JSON.stringify(index), false);
+    return key;
+  } catch (e) { return null; }
+}
+
+/* Lists every recoverable snapshot (cloud index + any local-only copies),
+   richest first, so the most complete backup is easy to restore. */
+async function listBackups() {
+  const map = new Map();
+  try {
+    const r = await window.storage.get(BACKUP_INDEX_KEY, false);
+    if (r && r.value) JSON.parse(r.value).forEach((b) => { if (b && b.key) map.set(b.key, b); });
+  } catch (e) { /* ignore */ }
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf(BACKUP_PREFIX) === 0 && !map.has(k)) {
+        try { const v = JSON.parse(localStorage.getItem(k)); map.set(k, { key: k, at: v._backupAt, txCount: v._txCount || txnCount(v), tag: v._tag || "" }); }
+        catch (e) { /* skip corrupt */ }
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return Array.from(map.values()).sort((a, b) => (b.txCount || 0) - (a.txCount || 0) || String(b.at).localeCompare(String(a.at)));
+}
+
+async function readBackup(key) {
+  try {
+    const r = await window.storage.get(key, false);
+    if (r && r.value) return JSON.parse(r.value);
+  } catch (e) { /* ignore */ }
+  try { const v = localStorage.getItem(key); if (v) return JSON.parse(v); } catch (e) { /* ignore */ }
+  return null;
+}
+
+/* Scans the live record and every backup and returns the richest one. Used to
+   auto-recover when the live record is found emptier than a known backup. */
+async function recoverBestState() {
+  const candidates = [];
+  const live = await loadState();
+  if (live) candidates.push({ key: STORAGE_KEY, state: live, txCount: txnCount(live) });
+  const backups = await listBackups();
+  for (const b of backups) {
+    const s = await readBackup(b.key);
+    if (s) candidates.push({ key: b.key, state: s, txCount: txnCount(s) });
+  }
+  candidates.sort((a, b) => b.txCount - a.txCount);
+  return candidates[0] || null;
+}
+
+/* ---- Cross-module integrity / reconciliation ----
+   Walks the Request → Release → Liquidation → Replenishment chain and reports
+   completeness, orphans and duplicates. Pure function — safe to unit test. */
+function buildIntegrityReport(requests, disbursements, liquidations, replenishments) {
+  const reqs = requests || [], disbs = disbursements || [], liqs = liquidations || [], reps = replenishments || [];
+  const disbByReq = new Map();
+  disbs.forEach((d) => { if (d.requestId) { if (!disbByReq.has(d.requestId)) disbByReq.set(d.requestId, []); disbByReq.get(d.requestId).push(d); } });
+  const liqByDisb = new Map();
+  liqs.forEach((l) => { if (l.disbursementId) { if (!liqByDisb.has(l.disbursementId)) liqByDisb.set(l.disbursementId, []); liqByDisb.get(l.disbursementId).push(l); } });
+  const repByBranch = new Map();
+  reps.forEach((r) => { const b = r.branchCode || "—"; repByBranch.set(b, (repByBranch.get(b) || 0) + 1); });
+
+  const rows = reqs.map((r) => {
+    const ds = disbByReq.get(r.id) || [];
+    const hasRelease = ds.length > 0;
+    const hasLiquidation = ds.some((d) => (liqByDisb.get(d.id) || []).length > 0);
+    const hasReplenishment = ds.some((d) => repByBranch.has(d.branchCode)) || repByBranch.has(r.branchCode);
+    let status;
+    if (!hasRelease) status = "Missing Release";
+    else if (!hasLiquidation) status = "Missing Liquidation";
+    else status = "Complete";
+    return {
+      ref: r.requestNo || r.id, request: true, release: hasRelease,
+      liquidation: hasLiquidation, replenishment: hasReplenishment, status,
+    };
+  });
+
+  const reqIds = new Set(reqs.map((r) => r.id));
+  const disbIds = new Set(disbs.map((d) => d.id));
+  const orphanDisbursements = disbs.filter((d) => !d.requestId || !reqIds.has(d.requestId)).map((d) => d.voucherNo || d.id);
+  const orphanLiquidations = liqs.filter((l) => !l.disbursementId || !disbIds.has(l.disbursementId)).map((l) => l.id);
+
+  const dup = (list, key) => {
+    const seen = new Map();
+    list.forEach((x) => { const k = x[key]; if (k) seen.set(k, (seen.get(k) || 0) + 1); });
+    return Array.from(seen.entries()).filter(([, n]) => n > 1).map(([k]) => k);
+  };
+  const duplicateRequestNos = dup(reqs, "requestNo");
+  const duplicateVoucherNos = dup(disbs, "voucherNo");
+  const duplicateReplenishmentNos = dup(reps, "replenishmentNo");
+
+  const multiLiquidations = Array.from(liqByDisb.entries()).filter(([, arr]) => arr.length > 1).map(([id]) => id);
+
+  return {
+    rows,
+    counts: {
+      requests: reqs.length, disbursements: disbs.length, liquidations: liqs.length, replenishments: reps.length,
+      complete: rows.filter((r) => r.status === "Complete").length,
+      missingRelease: rows.filter((r) => r.status === "Missing Release").length,
+      missingLiquidation: rows.filter((r) => r.status === "Missing Liquidation").length,
+    },
+    orphanDisbursements, orphanLiquidations,
+    duplicateRequestNos, duplicateVoucherNos, duplicateReplenishmentNos,
+    duplicateLiquidations: multiLiquidations,
+    healthy: orphanDisbursements.length === 0 && orphanLiquidations.length === 0
+      && duplicateRequestNos.length === 0 && duplicateVoucherNos.length === 0
+      && duplicateReplenishmentNos.length === 0 && multiLiquidations.length === 0,
+  };
 }
 
 /* ============================= DERIVED METRICS ============================= */
