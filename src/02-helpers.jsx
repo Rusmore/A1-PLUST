@@ -299,6 +299,65 @@ function liqApprovalStatus(liq) {
   return "Pending Approval";
 }
 
+/* ---- Standardized liquidation rejection reasons ----
+   When the authorized Liquidation Approver (Grace Gan) rejects a liquidation
+   she must pick ONE of these controlled reasons. The reason is the official
+   classification of why the liquidation was rejected; the Reviewer Comment is
+   an optional free-text explanation stored separately. */
+const LIQUIDATION_REJECTION_REASONS = [
+  { group: "Receipt / Documentation", reasons: [
+    "Missing Receipt",
+    "Invalid Receipt",
+    "Unreadable Receipt",
+    "Incomplete Receipt Details",
+    "Duplicate Receipt",
+    "Receipt Does Not Match Expense",
+    "Missing Required Supporting Document",
+    "Unsupported Expense Documentation",
+  ] },
+  { group: "Requestor", reasons: [
+    "Incorrect PCF Requestor",
+    "PCF Requestor Information Incomplete",
+    "Incorrect Reimbursement Requestor",
+    "Reimbursement Requestor Information Incomplete",
+    "Requestor Clarification Required",
+  ] },
+  { group: "Expense", reasons: [
+    "Non-Allowable Expense",
+    "Incorrect Expense Classification",
+    "Expense Not Related to Company Business",
+    "Expense Outside PCF Policy",
+    "Expense Requires Additional Approval",
+  ] },
+  { group: "Amount / Transaction", reasons: [
+    "Incorrect Amount",
+    "Overclaimed Amount",
+    "Duplicate Reimbursement",
+    "Incorrect Transaction Reference",
+  ] },
+  { group: "Approval / Process", reasons: [
+    "Missing Required Approval",
+    "Incorrect Approval",
+    "Liquidation Submitted Incorrectly",
+    "Liquidation Requires Correction",
+  ] },
+  { group: "Other", reasons: [
+    "Insufficient Supporting Information",
+    "Other Accounting/Finance Review Finding",
+  ] },
+];
+const LIQUIDATION_REJECTION_REASON_SET = new Set(
+  LIQUIDATION_REJECTION_REASONS.reduce((acc, g) => acc.concat(g.reasons), [])
+);
+/* Backend-side validation: the rejection reason must be one of the approved
+   values above, so an unauthorized or malformed rejection is refused. */
+const isValidLiquidationRejectionReason = (reason) =>
+  LIQUIDATION_REJECTION_REASON_SET.has(String(reason || "").trim());
+
+/* Every rejection kept as its own record — the ordered rejection history. */
+const liqRejections = (liq) => ((liq && liq.rejections) || []);
+const liqIsRejected = (liq) => ((liq && liq.submissionStatus) || "Draft") === "Rejected";
+
 /* ---- Receipt amounts at the SUPPORTING DOCUMENT level ----
    Each uploaded document carries its own receiptAmount, so the liquidation
    total is always recalculated from the individual documents rather than being
@@ -404,6 +463,9 @@ function settlementStateFor(disb, liq) {
    resulting refund or reimbursement has actually been completed. */
 function liqFinalStatus(disb, liq) {
   if (!liq || !((liq.attachments || []).length)) return "Not Liquidated";
+  /* A standing rejection takes precedence until the requestor corrects and
+     resubmits (which flips submissionStatus back to Submitted). */
+  if ((liq.submissionStatus || "Draft") === "Rejected") return "REJECTED";
   const approval = receiptApprovalSummary(liq);
   const st = settlementStateFor(disb, liq);
   if (approval.anyRejected) return "For Revision";
@@ -412,9 +474,11 @@ function liqFinalStatus(disb, liq) {
   return st.settled ? "LIQUIDATED" : "NOT YET LIQUIDATED";
 }
 
-/* A liquidation is editable by its requestor only while still in Draft. */
+/* A liquidation is editable by its requestor while still in Draft, or after a
+   rejection so the requestor can correct it and resubmit. */
 function liqIsDraft(liq) {
-  return !liq || (liq.submissionStatus || "Draft") === "Draft";
+  const s = (liq && liq.submissionStatus) || "Draft";
+  return !liq || s === "Draft" || s === "Rejected";
 }
 
 /* ---- Duplicate supporting-document detection ----

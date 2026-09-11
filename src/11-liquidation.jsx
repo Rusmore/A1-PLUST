@@ -4,8 +4,65 @@
    receipts before they are processed. */
 const RECEIPT_APPROVER_NAME = "Grace Gan";
 
+/* Emails that resolve to the authorized Liquidation Approver, so the identity
+   still holds even if the display name differs. Approve/Reject Liquidation is
+   restricted to this person only (see isLiquidationApprover in 19-app.jsx). */
+const LIQUIDATION_APPROVER_EMAILS = ["a1plusadmin@a1plus.com"];
+
 /* The cash settlement classification now derives from the per-document receipt
    amounts — see reconcileReceipts / settlementStateFor in 02-helpers.jsx. */
+
+/* Reject-liquidation dialog — a standardized Rejection Reason (required) plus an
+   optional Reviewer Comment. Only the authorized approver reaches this dialog;
+   the asterisk marks the reason field alone. */
+function RejectLiquidationModal({ voucherNo, employee, onClose, onConfirm }) {
+  const [reason, setReason] = useState("");
+  const [comment, setComment] = useState("");
+  const confirm = () => {
+    if (!reason) { window.alert("Please select a rejection reason."); return; }
+    onConfirm({ reason, comment: comment.trim() });
+  };
+  return (
+    <div className="pcp-modal-backdrop" onClick={onClose}>
+      <div className="pcp-modal" style={{ maxWidth: 460 }} onClick={(e) => e.stopPropagation()}>
+        <div className="pcp-modal-head">
+          <h3>Reject Liquidation</h3>
+          <button className="pcp-btn pcp-btn-ghost pcp-btn-sm" onClick={onClose}><X size={15} /></button>
+        </div>
+        <div className="pcp-modal-body">
+          <div style={{ fontSize: 11.5, color: "var(--text-mut)", marginBottom: 4 }}>
+            {voucherNo}{employee ? ` · ${employee}` : ""}
+          </div>
+          <div className="pcp-field">
+            <label>Rejection Reason <span style={{ color: "var(--brand)" }}>*</span></label>
+            <select className="pcp-select" value={reason} onChange={(e) => setReason(e.target.value)}>
+              <option value="">Select reason for rejection</option>
+              {LIQUIDATION_REJECTION_REASONS.map((g) => (
+                <optgroup key={g.group} label={g.group}>
+                  {g.reasons.map((r) => <option key={r} value={r}>{r}</option>)}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+          <div className="pcp-field">
+            <label>Reviewer Comment <span style={{ color: "var(--text-mut)", fontWeight: 500 }}>(Optional)</span></label>
+            <textarea
+              className="pcp-input" rows={4}
+              value={comment} onChange={(e) => setComment(e.target.value)}
+              placeholder="Enter additional comments..."
+            />
+          </div>
+          <div className="pcp-modal-foot" style={{ padding: "8px 0 0" }}>
+            <button type="button" className="pcp-btn" onClick={onClose}>Cancel</button>
+            <button type="button" className="pcp-btn pcp-btn-danger" onClick={confirm} disabled={!reason}>
+              <X size={13} /> Confirm Rejection
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function emptyLine() {
   return { id: uid("ln"), date: todayISO(), expense: "", category: EXPENSE_CATEGORIES[0], department: SUBACCOUNTS[1].code, amount: "", taxCategory: "" };
@@ -27,6 +84,7 @@ function LiquidationWorksheet({
   disbursement, liquidation, onSave, onExport, canApproveReceipts, onDecideReceipt,
   liquidations, disbursements, onSubmitLiquidation, onReopenLiquidation,
   onRecordSettlement, onReviewOverLiquidation, canDelete, onDeleteLiquidation,
+  canRejectLiquidation, onRejectLiquidation,
 }) {
   const [lines, setLines] = useState(liquidation ? liquidation.lines.map((l) => ({ ...l })) : [emptyLine()]);
   const [attachments, setAttachments] = useState(
@@ -37,6 +95,8 @@ function LiquidationWorksheet({
   const [dupNote, setDupNote] = useState("");
   /* Actual amount keyed in by the custodian when recording the settlement. */
   const [actualInput, setActualInput] = useState("");
+  /* Open state of the standardized Reject Liquidation dialog. */
+  const [showReject, setShowReject] = useState(false);
 
   useEffect(() => {
     setLines(liquidation ? liquidation.lines.map((l) => ({ ...l })) : [emptyLine()]);
@@ -45,6 +105,7 @@ function LiquidationWorksheet({
     setUploadNote("");
     setDupNote("");
     setActualInput("");
+    setShowReject(false);
   }, [disbursement.id]);
 
   const updateLine = (id, patch) => {
@@ -140,6 +201,10 @@ function LiquidationWorksheet({
   const st = settlementStateFor(disbursement, liveLiq);
   const finalStatus = liqFinalStatus(disbursement, liveLiq);
   const isDraft = liqIsDraft(liquidation);
+  /* A standing rejection lets the requestor correct and resubmit while its
+     reason(s) stay on the record. */
+  const isRejected = liqIsRejected(liquidation);
+  const rejections = liqRejections(liquidation);
   /* After submission the amounts are read-only; only a receipt approver may
      still correct them, and every such change is written to the audit trail. */
   const amountsLocked = !isDraft && !canApproveReceipts;
@@ -227,6 +292,14 @@ function LiquidationWorksheet({
     onReopenLiquidation(disbursement.id, reason.trim());
   };
 
+  /* Confirm a standardized rejection — the dialog already blocks a blank reason;
+     the comment is passed through as-is (may be empty). */
+  const handleConfirmReject = ({ reason, comment }) => {
+    if (!onRejectLiquidation) return;
+    onRejectLiquidation(disbursement.id, { reason, comment });
+    setShowReject(false);
+  };
+
   /* Recording the settlement asserts the cash HAS moved, so the actual amount
      is captured and must equal the expected amount before it counts as settled. */
   const handleRecordSettlement = () => {
@@ -274,7 +347,7 @@ function LiquidationWorksheet({
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7, flexWrap: "wrap" }}>
               <Badge status={finalStatus} />
-              <Badge status={isDraft ? "Draft" : "Submitted"} />
+              <Badge status={isRejected ? "Rejected" : (isDraft ? "Draft" : "Submitted")} />
               {!isDraft && liquidation && liquidation.submittedBy && (
                 <span style={{ fontSize: 10.5, color: "var(--text-mut)" }}>
                   submitted by {liquidation.submittedBy} · {(liquidation.submittedAt || "").replace("T", " ")}
@@ -296,12 +369,25 @@ function LiquidationWorksheet({
                 disabled={!canSubmit}
                 title={canSubmit ? "Submit the final liquidation" : `To submit: ${submitBlockers.join("; ")}`}
               >
-                <Check size={12} /> Submit Liquidation
+                <Check size={12} /> {isRejected ? "Resubmit Liquidation" : "Submit Liquidation"}
               </button>
-            ) : canApproveReceipts && (
-              <button className="pcp-btn pcp-btn-sm" onClick={handleReopen} title="Reopen for editing (recorded in the audit trail)">
-                <Edit3 size={12} /> Reopen
-              </button>
+            ) : (
+              <>
+                {canApproveReceipts && (
+                  <button className="pcp-btn pcp-btn-sm" onClick={handleReopen} title="Reopen for editing (recorded in the audit trail)">
+                    <Edit3 size={12} /> Reopen
+                  </button>
+                )}
+                {canRejectLiquidation && liquidation && (
+                  <button
+                    className="pcp-btn pcp-btn-sm pcp-btn-danger"
+                    onClick={() => setShowReject(true)}
+                    title="Reject this liquidation with a standardized reason"
+                  >
+                    <X size={12} /> Reject Liquidation
+                  </button>
+                )}
+              </>
             )}
             {canDelete && onDeleteLiquidation && liquidation && (
               <button
@@ -324,6 +410,39 @@ function LiquidationWorksheet({
           <div className="pcp-liq-metric"><div className="pcp-kpi-label">Status</div><div><Badge status={finalStatus} /></div></div>
         </div>
       </div>
+
+      {/* Rejection history — every rejection kept as its own record and never
+          overwritten. The most recent appears first. */}
+      {rejections.length > 0 && (
+        <div className="pcp-card pcp-card-pad" style={{ marginBottom: 12, borderColor: isRejected ? "var(--brand)" : "var(--line)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <AlertTriangle size={15} color="#c8102e" />
+            <div className="pcp-section-title" style={{ margin: 0 }}>Rejection History</div>
+            <span style={{ fontSize: 11, color: "var(--text-mut)" }}>({rejections.length})</span>
+          </div>
+          {isRejected && (
+            <div style={{ fontSize: 12, color: "var(--brand-dark)", marginBottom: 10 }}>
+              This liquidation was rejected. Correct the items below and resubmit — the original rejection reason(s) stay on record.
+            </div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {rejections.slice().reverse().map((r, i) => (
+              <div key={r.id || i} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "9px 11px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700 }}>Rejection #{rejections.length - i}</div>
+                  <Badge status="REJECTED" />
+                </div>
+                <div style={{ fontSize: 12, marginTop: 4 }}><strong>Rejection Reason:</strong> {r.reason}</div>
+                <div style={{ fontSize: 12, marginTop: 2 }}><strong>Reviewer Comment:</strong> {r.comment ? r.comment : "—"}</div>
+                <div style={{ fontSize: 10.5, color: "var(--text-mut)", marginTop: 4 }}>
+                  Rejected by {r.rejectedBy} · {(r.rejectedAt || "").replace("T", " ")}
+                  {r.prevStatus ? ` · ${r.prevStatus} → ${r.newStatus}` : ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Automated computation + receipt-approval gate (collapsible secondary detail). */}
       <Collapsible title="Automated Computation & Receipt Approval" subtitle="encoded totals, receipt approvals">
@@ -762,6 +881,15 @@ function LiquidationWorksheet({
         </div>
       )}
       </div>
+
+      {showReject && (
+        <RejectLiquidationModal
+          voucherNo={disbursement.voucherNo}
+          employee={disbursement.employee}
+          onClose={() => setShowReject(false)}
+          onConfirm={handleConfirmReject}
+        />
+      )}
     </div>
   );
 }
@@ -882,6 +1010,7 @@ function LiquidationTab({
   disbursements, liquidations, onSaveLiquidation, onExport, onExportAll, plantOptions, plantTitle,
   canApproveReceipts, onDecideReceipt, onSubmitLiquidation, onReopenLiquidation,
   onRecordSettlement, onReviewOverLiquidation, canDelete, onDeleteLiquidation,
+  canRejectLiquidation, onRejectLiquidation,
   reimbursements, onReimbursementAction, canFinance,
 }) {
   const [selectedId, setSelectedId] = useState(null);
@@ -994,6 +1123,8 @@ function LiquidationTab({
                 onReviewOverLiquidation={onReviewOverLiquidation}
                 canDelete={canDelete}
                 onDeleteLiquidation={onDeleteLiquidation}
+                canRejectLiquidation={canRejectLiquidation}
+                onRejectLiquidation={onRejectLiquidation}
               />
             ) : (
               <div className="pcp-card pcp-card-pad"><div className="pcp-empty">Select a voucher to begin liquidation</div></div>

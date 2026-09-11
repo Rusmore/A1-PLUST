@@ -248,6 +248,25 @@ const CSS = `
   .pcp-appr-approved { background: var(--green-bg); color: var(--green); }
   .pcp-appr-pending { background: var(--amber-bg); color: var(--amber); }
   .pcp-appr-rejected { background: var(--red-bg); color: var(--brand); }
+  /* Searchable Purpose dropdown (controlled Accounting master data) */
+  .pcp-purpose-wrap { position: relative; }
+  .pcp-purpose-btn {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    width: 100%; text-align: left; cursor: pointer;
+  }
+  .pcp-purpose-btn.placeholder { color: var(--text-mut); }
+  .pcp-purpose-pop {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 60;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(20,20,50,0.16); padding: 8px;
+  }
+  .pcp-purpose-group {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;
+    color: var(--text-mut); padding: 8px 8px 4px;
+  }
+  .pcp-purpose-opt { font-size: 12.5px; padding: 7px 9px; border-radius: 7px; cursor: pointer; }
+  .pcp-purpose-opt:hover { background: var(--red-bg); }
+  .pcp-purpose-opt.active { background: var(--brand); color: #fff; }
   .pcp-appr-row {
     display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: center;
     padding: 10px 0; border-bottom: 1px solid #eef0f3;

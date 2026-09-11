@@ -110,7 +110,7 @@ function AuditTrailTab({ auditLog, canDelete, onDelete }) {
                     )}
                     <td style={{ whiteSpace: "nowrap" }}><Clock size={12} style={{ verticalAlign: "-2px", marginRight: 5, color: "#9098b3" }} />{fmtTs(a.ts)}</td>
                     <td>{a.user}</td>
-                    <td><span className={"pcp-badge pcp-badge-" + (a.action === "Rejected" || a.action === "Deleted" || a.action === "Audit Entry Deleted" ? "red" : a.action === "Approved" || a.action === "Released" || a.action === "Replenished" ? "green" : a.action === "Liquidated" ? "blue" : "gray")}>{a.action}</span></td>
+                    <td><span className={"pcp-badge pcp-badge-" + (a.action === "Rejected" || a.action === "Liquidation Rejected" || a.action === "Receipt Rejected" || a.action === "Deleted" || a.action === "Audit Entry Deleted" ? "red" : a.action === "Approved" || a.action === "Released" || a.action === "Replenished" ? "green" : a.action === "Liquidated" ? "blue" : "gray")}>{a.action}</span></td>
                     <td>{a.entity}</td>
                     <td style={{ whiteSpace: "normal" }}>{a.remarks}</td>
                     {canDelete && (

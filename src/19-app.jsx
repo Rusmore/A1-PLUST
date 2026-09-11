@@ -56,6 +56,16 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
      "view as Custodian" sees an honest preview with the delete actions hidden. */
   const isSuperAdmin = (userRole || "") === "SuperAdmin" && role === "SuperAdmin";
 
+  /* The sole authorized Liquidation Approver — only Grace Gan may approve or
+     reject a liquidation. Matched by display name or configured email, and
+     enforced again inside rejectLiquidation so a bypassed UI still fails. */
+  const isLiquidationApprover = useMemo(() => {
+    const name = (userName || "").trim().toLowerCase();
+    const email = (userEmail || "").trim().toLowerCase();
+    return name === RECEIPT_APPROVER_NAME.toLowerCase()
+      || LIQUIDATION_APPROVER_EMAILS.map((e) => e.toLowerCase()).includes(email);
+  }, [userName, userEmail]);
+
   /* Append an entry to the immutable audit trail, tagged with the signed-in user. */
   const logAudit = useCallback((action, entity, remarks) => {
     setAuditLog((log) => [...log, {
@@ -349,10 +359,62 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     logAudit("Over-Liquidation Reviewed", d ? d.voucherNo : disbursementId, remarks || "");
   }, [logAudit, disbursements, userName, role]);
 
+  /* ---- Liquidation rejection (Grace Gan only) ----
+     A rejection requires ONE standardized reason; the reviewer comment is
+     optional and stored verbatim (empty stays empty — never a placeholder).
+     Each rejection is appended as its own record and never overwrites an
+     earlier one, and the liquidation returns to an editable state so the
+     requestor can correct and resubmit. Authorization is re-checked here, so a
+     bypassed UI cannot reject through this handler. */
+  const rejectLiquidation = useCallback((disbursementId, payload) => {
+    if (!isLiquidationApprover) {
+      window.alert(`Only ${RECEIPT_APPROVER_NAME} is authorized to reject a liquidation.`);
+      return;
+    }
+    const reason = String((payload && payload.reason) || "").trim();
+    if (!isValidLiquidationRejectionReason(reason)) {
+      window.alert("Please select a rejection reason.");
+      return;
+    }
+    const comment = String((payload && payload.comment) || "").trim();
+    const ts = new Date().toISOString().slice(0, 19);
+    const actor = userName || role;
+    const d = disbursements.find((x) => x.id === disbursementId);
+    const liq = liquidations.find((l) => l.disbursementId === disbursementId);
+    if (!liq) return;
+    const req = d ? requests.find((r) => r.id === d.requestId) : null;
+    const prevStatus = liqFinalStatus(d, liq);
+    const record = {
+      id: uid("rej"),
+      liquidationId: liq.id,
+      pcfRequestor: d ? d.employee : "",
+      reimbursementRequestor: "",
+      purpose: req ? req.purpose : "",
+      amount: d ? d.amount : 0,
+      reason,
+      comment, // empty string when no comment — no placeholder text
+      rejectedBy: actor,
+      rejectedAt: ts,
+      prevStatus,
+      newStatus: "REJECTED",
+    };
+    setLiquidations((ls) => ls.map((l) => (
+      l.disbursementId === disbursementId
+        ? { ...l, submissionStatus: "Rejected", rejections: [...(l.rejections || []), record] }
+        : l
+    )));
+    logAudit("Liquidation Rejected", d ? d.voucherNo : disbursementId,
+      `Reason: ${reason}${comment ? ` · Comment: ${comment}` : ""} · ${prevStatus} → REJECTED`);
+  }, [isLiquidationApprover, logAudit, disbursements, liquidations, requests, userName, role]);
+
   /* ---- Receipt approval (per uploaded Official Receipt / Sales Invoice) ----
      Approver is Grace Gan (super admin). Each decision is stamped into the
      receipt's own approval history and recorded in the audit trail. */
   const decideReceipt = useCallback((disbursementId, attachmentId, decision, remarks) => {
+    if (!isLiquidationApprover) {
+      window.alert(`Only ${RECEIPT_APPROVER_NAME} is authorized to review liquidation receipts.`);
+      return;
+    }
     const ts = new Date().toISOString().slice(0, 19);
     const approver = userName || role;
     let receiptName = attachmentId;
@@ -375,7 +437,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       d ? d.voucherNo : disbursementId,
       `${receiptName}${remarks ? ` · ${remarks}` : ""}`
     );
-  }, [logAudit, disbursements, userName, role]);
+  }, [isLiquidationApprover, logAudit, disbursements, userName, role]);
 
   /* ---- Deletion (SuperAdmin only) ----
      Each delete leaves the surviving records consistent: a voucher takes its
@@ -608,6 +670,15 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const nextReimbNo = () => "REIM-2026-" + String(reimbursements.length + 1).padStart(6, "0");
 
   const addReimbursement = useCallback((form, submit) => {
+    /* Backend enforcement (Section 7): a SUBMITTED reimbursement must carry one
+       approved, ACTIVE purpose — never blank, free-text or injected. Drafts may
+       still be saved with an incomplete purpose. */
+    if (submit && !isActiveReimbPurpose((form.purpose || "").trim())) {
+      window.alert((form.purpose || "").trim()
+        ? "Invalid Purpose. Please select an approved expense category from the Purpose dropdown."
+        : "Purpose is required. Please select an approved expense category.");
+      return;
+    }
     const reimbNo = nextReimbNo();
     const ts = reimbTs();
     const base = buildReimbFromForm(form);
@@ -623,6 +694,13 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   }, [buildReimbFromForm, logAudit, reimbursements, userName, role]);
 
   const updateReimbursement = useCallback((id, form, mode) => {
+    /* Same backend purpose check as addReimbursement, applied on resubmission. */
+    if (mode === "submit" && !isActiveReimbPurpose((form.purpose || "").trim())) {
+      window.alert((form.purpose || "").trim()
+        ? "Invalid Purpose. Please select an approved expense category from the Purpose dropdown."
+        : "Purpose is required. Please select an approved expense category.");
+      return;
+    }
     const ts = reimbTs();
     const base = buildReimbFromForm({ ...form, id });
     setReimbursements((rs) => rs.map((r) => {
@@ -710,6 +788,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     const meta = [
       ["Reimbursement — Acumatica Import Sheet"],
       ["Reimbursement No.", reimb.reimbNo], ["Employee", reimb.employee],
+      ["Purpose", reimb.purpose || ""], ["Purpose Category", purposeCategory(reimb.purpose)],
       ["Company", companyOfBranch(reimb.branchCode)], ["Total", reimbTotal(reimb)], [],
     ];
     const ws = XLSX.utils.aoa_to_sheet(meta);
@@ -725,6 +804,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     const rows = (list || []).map((r) => ({
       "Reimb No.": r.reimbNo, "Employee": r.employee, "Department": deptDesc(r.department),
       "Company": companyOfBranch(r.branchCode), "Plant": plantLabel(r.branchCode),
+      "Category": purposeCategory(r.purpose), "Purpose": r.purpose || "",
       "Request Date": r.requestDate, "Lines": (r.lines || []).length, "Total Amount": reimbTotal(r),
       "Compliance": (r.compliance && r.compliance.level) || "PASS", "Status": r.status,
       "Approved By": r.approvedBy || "", "Payment Date": (r.payment && r.payment.date) || "",
@@ -936,7 +1016,9 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onRecordSettlement={recordSettlement}
             onReviewOverLiquidation={reviewOverLiquidation}
             canDelete={isSuperAdmin} onDeleteLiquidation={deleteLiquidation}
-            canApproveReceipts={!!isAdmin}
+            canApproveReceipts={isLiquidationApprover}
+            canRejectLiquidation={isLiquidationApprover}
+            onRejectLiquidation={rejectLiquidation}
             reimbursements={scopedReimbursements}
             onReimbursementAction={reimbursementAction}
             canFinance={["Accounting", "Finance", "SuperAdmin"].includes(role) || !!isAdmin}

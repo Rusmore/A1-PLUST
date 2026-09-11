@@ -1010,6 +1010,102 @@ const ALLOWABLE_PURPOSES = [
   "OE Transportation and travel",
 ];
 
+/* ============================= REIMBURSEMENT PURPOSE MASTER =============================
+   Controlled Accounting master-data classification for the Reimbursement module.
+   Exactly 56 approved FOH/OE expense purposes (25 FOH + 31 OE). Purpose is
+   treated as master data, NOT free text: an employee selects ONE ACTIVE value,
+   the backend validates the selection, and the classification travels with the
+   transaction through its whole PCF lifecycle.
+
+   Never physically delete a purpose that a transaction has used — disable it
+   (status !== "ACTIVE") instead. Only ACTIVE purposes are offered for new
+   reimbursements; historical transactions always keep and display their
+   original purpose even if it is later disabled. */
+const REIMB_PURPOSE_MASTER = (() => {
+  const foh = [
+    "FOH Communication, Light & Water",
+    "FOH Delivery Expense",
+    "FOH Delivery Expense-Transpo",
+    "FOH Demurrage",
+    "FOH Distribution Charge",
+    "FOH Duties & Taxes",
+    "FOH Freight In Charges",
+    "FOH Handling Fees",
+    "FOH Insurance",
+    "FOH Licensing Fee",
+    "FOH Miscellaneous",
+    "FOH Oil & Gasoline",
+    "FOH Other Charges",
+    "FOH Production Tools",
+    "FOH Rental",
+    "FOH Rep & Main. - Bldg. Equipment",
+    "FOH Rep & Main. - Building",
+    "FOH Rep & Main. - Delivery Truck",
+    "FOH Rep & Main. - Fire Truck",
+    "FOH Rep & Main. - Inventory Discrepancy",
+    "FOH Rep & Main. - Machineries",
+    "FOH Rep & Main. - Motorcycle Services",
+    "FOH Rep & Main. - Prod Equipment",
+    "FOH Testing Fee",
+    "FOH Toll Fee",
+  ];
+  const oe = [
+    "OE - Feeds",
+    "OE Advertising and Promotion",
+    "OE Communication, Light & Water",
+    "OE Courier Services",
+    "OE Documentary Stamp Tax",
+    "OE Documentation, Registration",
+    "OE Dues, Subscription and List",
+    "OE Facilitation Fee",
+    "OE Insurance",
+    "OE Meal Allowance",
+    "OE Miscellaneous",
+    "OE Office Supplies",
+    "OE Oil & Gasoline",
+    "OE OJT Allowance",
+    "OE Other Charges",
+    "OE Printing, Supplies & Office",
+    "OE Product Licensing/Patent Fee",
+    "OE Professional Fees",
+    "OE Rental",
+    "OE Rep. & Main - Building",
+    "OE Rep. & Main - Company Car",
+    "OE Rep. & Main - Land Improvement",
+    "OE Rep. & Main - Office Equipment",
+    "OE Rep. & Main - Residential & Leisure",
+    "OE Representation and Entertai",
+    "OE Samples",
+    "OE Seminars and Training Fee",
+    "OE Taxes and Licenses",
+    "OE Testing Fee",
+    "OE Toll Fee",
+    "OE Transportation and travel",
+  ];
+  const now = "2026-01-01T00:00:00";
+  const build = (names, category) => names.map((name, i) => ({
+    id: 0, code: category, name, category, status: "ACTIVE", created_at: now, updated_at: now,
+  }));
+  return build(foh, "FOH").concat(build(oe, "OE")).map((p, i) => ({ ...p, id: i + 1 }));
+})();
+
+/* Fast lookup + derived views used by the dropdown, validation and reporting. */
+const REIMB_PURPOSE_BY_NAME = REIMB_PURPOSE_MASTER.reduce((m, p) => { m[p.name] = p; return m; }, {});
+const REIMB_PURPOSE_ACTIVE = REIMB_PURPOSE_MASTER.filter((p) => p.status === "ACTIVE");
+const REIMB_PURPOSE_GROUPS = [
+  { category: "FOH", label: "FOH EXPENSES", purposes: REIMB_PURPOSE_ACTIVE.filter((p) => p.category === "FOH") },
+  { category: "OE", label: "OE EXPENSES", purposes: REIMB_PURPOSE_ACTIVE.filter((p) => p.category === "OE") },
+];
+/* Category (FOH/OE) of a stored purpose name, "" when unknown/legacy. */
+const purposeCategory = (name) => (REIMB_PURPOSE_BY_NAME[String(name || "").trim()] || {}).category || "";
+/* Is this the name of a purpose that exists in the master at all? */
+const isKnownReimbPurpose = (name) => !!REIMB_PURPOSE_BY_NAME[String(name || "").trim()];
+/* May this purpose be chosen for a NEW reimbursement (exists AND ACTIVE)? */
+const isActiveReimbPurpose = (name) => {
+  const p = REIMB_PURPOSE_BY_NAME[String(name || "").trim()];
+  return !!p && p.status === "ACTIVE";
+};
+
 const EXPENSE_CATEGORY_ACCOUNTS = {
   "DL 13th month pay": "51110120",
   "DL Contracted Support Services": "51110160",

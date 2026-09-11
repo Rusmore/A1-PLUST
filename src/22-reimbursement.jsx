@@ -148,7 +148,9 @@ function evaluateReimbursement(form, allReimbursements, selfId) {
   if (!(form.employee || "").trim()) add("fail", "employee", "Employee name is required.");
   if (!(form.department || "").trim()) add("fail", "department", "Department charged is required.");
   if (!(form.branchCode || "").trim()) add("fail", "branch", "Company / plant is required.");
-  if (!(form.purpose || "").trim()) add("fail", "purpose", "Description and purpose of the expense is required.");
+  const purposeVal = (form.purpose || "").trim();
+  if (!purposeVal) add("fail", "purpose", "Purpose is required. Please select an approved expense category.");
+  else if (!isActiveReimbPurpose(purposeVal)) add("fail", "purpose-invalid", "Invalid Purpose. Please select an approved expense category from the Purpose dropdown.");
   if (!lines.length) add("fail", "lines", "At least one expense line is required.");
 
   // Amount checks
@@ -240,6 +242,75 @@ function emptyReimbLine() {
     description: "", vendor: "", department: SUBACCOUNTS[1].code,
     costCenter: "", taxCategory: "", amount: "", businessPurpose: "", receiptNo: "",
   };
+}
+
+/* Controlled, searchable Purpose picker. The value can only ever be one of the
+   56 approved ACTIVE purposes — the text box filters the list but is never the
+   stored value, so free-text and injected values are impossible from the UI.
+   A legacy/inactive value already on a record is shown (so it stays visible)
+   but must be reselected before the form will validate. */
+function PurposeSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const ql = q.trim().toLowerCase();
+  const groups = REIMB_PURPOSE_GROUPS
+    .map((g) => ({ ...g, items: g.purposes.filter((p) => !ql || p.name.toLowerCase().includes(ql)) }))
+    .filter((g) => g.items.length);
+  const known = isKnownReimbPurpose(value);
+
+  return (
+    <div className="pcp-purpose-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className={"pcp-select pcp-purpose-btn" + (value ? "" : " placeholder")}
+        onClick={() => { setOpen((o) => !o); setQ(""); }}
+        aria-haspopup="listbox" aria-expanded={open}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {value || "Select an approved expense purpose"}
+        </span>
+        <ChevronRight size={14} style={{ transform: open ? "rotate(-90deg)" : "rotate(90deg)", flexShrink: 0, opacity: 0.6, transition: "transform 0.12s" }} />
+      </button>
+      {open && (
+        <div className="pcp-purpose-pop">
+          <input
+            autoFocus className="pcp-input" placeholder="Search purpose (e.g. toll, office)…"
+            value={q} onChange={(e) => setQ(e.target.value)}
+          />
+          <div style={{ maxHeight: 260, overflowY: "auto", marginTop: 6 }} role="listbox">
+            {groups.length ? groups.map((g) => (
+              <div key={g.category}>
+                <div className="pcp-purpose-group">{g.label}</div>
+                {g.items.map((p) => (
+                  <div
+                    key={p.id} role="option" aria-selected={p.name === value}
+                    className={"pcp-purpose-opt" + (p.name === value ? " active" : "")}
+                    onClick={() => { onChange(p.name); setOpen(false); setQ(""); }}
+                  >
+                    {p.name}
+                  </div>
+                ))}
+              </div>
+            )) : <div className="pcp-empty" style={{ padding: 12 }}>No approved purpose matches "{q}".</div>}
+          </div>
+        </div>
+      )}
+      {value && !known && (
+        <div style={{ fontSize: 10.5, color: "#b9790a", marginTop: 4 }}>
+          This purpose is no longer active. Select an approved expense purpose to continue.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ReimbursementFormModal({ onClose, onSaveDraft, onSubmit, reimb, nextReimbNo, plantOptions, allReimbursements, currentUser }) {
@@ -392,8 +463,11 @@ function ReimbursementFormModal({ onClose, onSaveDraft, onSubmit, reimb, nextRei
                 </div>
               </div>
               <div className="pcp-field">
-                <label>Description &amp; Purpose of Expense</label>
-                <textarea className="pcp-input" rows={2} placeholder="Overall business purpose of this reimbursement" value={form.purpose} onChange={(e) => set("purpose", e.target.value)} />
+                <label>Purpose <span style={{ color: "var(--brand)" }}>*</span></label>
+                <PurposeSelect value={form.purpose} onChange={(v) => set("purpose", v)} />
+                <div style={{ fontSize: 10.5, color: "var(--text-mut)", marginTop: 4 }}>
+                  Select the approved expense classification. This does not, by itself, make an expense reimbursable — the usual receipts, approvals and supporting documents still apply.
+                </div>
               </div>
               <div className="pcp-field">
                 <label>Remarks (optional)</label>
@@ -620,7 +694,12 @@ function ReimbursementDetail({ reimb, onClose, onAction, onExportAcumatica, curr
             </div>
             <CompliancePill level={(reimb.compliance && reimb.compliance.level) || "PASS"} />
           </div>
-          <div style={{ fontSize: 12, color: "var(--text-mut)", marginBottom: 10 }}>{reimb.purpose}</div>
+          <div style={{ fontSize: 12, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 600 }}>Purpose:</span>
+            {reimb.purpose
+              ? <>{purposeCategory(reimb.purpose) && <span className="pcp-badge pcp-badge-gray">{purposeCategory(reimb.purpose)}</span>}<span style={{ color: "var(--text-mut)" }}>{reimb.purpose}</span></>
+              : <span style={{ color: "var(--text-mut)" }}>—</span>}
+          </div>
 
           <div className="pcp-table-wrap">
             <table className="pcp-table">
@@ -805,6 +884,8 @@ function ReimbursementTab({
   const [statusFilter, setStatusFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [plant, setPlant] = useState("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [purposeFilter, setPurposeFilter] = useState("All");
 
   const seq = (allReimbursements || reimbursements).length + 1;
   const nextReimbNo = "REIM-2026-" + String(seq).padStart(6, "0");
@@ -812,9 +893,11 @@ function ReimbursementTab({
   const filtered = reimbursements.filter((r) => {
     if (plant !== "ALL" && r.branchCode !== plant) return false;
     if (statusFilter !== "All" && r.status !== statusFilter) return false;
+    if (categoryFilter !== "All" && purposeCategory(r.purpose) !== categoryFilter) return false;
+    if (purposeFilter !== "All" && (r.purpose || "") !== purposeFilter) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!(r.employee.toLowerCase().includes(q) || r.reimbNo.toLowerCase().includes(q))) return false;
+      if (!(r.employee.toLowerCase().includes(q) || r.reimbNo.toLowerCase().includes(q) || (r.purpose || "").toLowerCase().includes(q))) return false;
     }
     return true;
   });
@@ -878,6 +961,19 @@ function ReimbursementTab({
             <select className="pcp-select" style={{ width: 200 }} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               {["All", ...Object.values(REIMB_STATUS)].map((s) => <option key={s}>{s}</option>)}
             </select>
+            <select className="pcp-select" style={{ width: 130 }} value={categoryFilter} onChange={(e) => { setCategoryFilter(e.target.value); setPurposeFilter("All"); }} title="Filter by expense category">
+              <option value="All">All Categories</option>
+              <option value="FOH">FOH</option>
+              <option value="OE">OE</option>
+            </select>
+            <select className="pcp-select" style={{ width: 220 }} value={purposeFilter} onChange={(e) => setPurposeFilter(e.target.value)} title="Filter by purpose">
+              <option value="All">All Purposes</option>
+              {REIMB_PURPOSE_GROUPS.filter((g) => categoryFilter === "All" || g.category === categoryFilter).map((g) => (
+                <optgroup key={g.category} label={g.label}>
+                  {g.purposes.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+                </optgroup>
+              ))}
+            </select>
             <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-mut)" }}>{filtered.length} of {reimbursements.length}</div>
           </div>
           <div className="pcp-table-wrap">
@@ -885,7 +981,7 @@ function ReimbursementTab({
               <thead>
                 <tr>
                   <th>Reimb No.</th><th>Req Date</th><th>Employee</th><th>Department</th><th>Plant</th>
-                  <th>Lines</th><th>Amount</th><th>Compliance</th><th>Status</th><th>Aging</th><th></th>
+                  <th>Purpose</th><th>Lines</th><th>Amount</th><th>Compliance</th><th>Status</th><th>Aging</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -896,6 +992,11 @@ function ReimbursementTab({
                     <td>{r.employee}</td>
                     <td title={subaccountLabel(r.department)}>{deptDesc(r.department)}</td>
                     <td>{plantLabel(r.branchCode)}</td>
+                    <td title={r.purpose || ""}>
+                      {r.purpose
+                        ? <span>{purposeCategory(r.purpose) && <span className="pcp-badge pcp-badge-gray" style={{ marginRight: 6 }}>{purposeCategory(r.purpose)}</span>}{r.purpose}</span>
+                        : <span style={{ color: "var(--text-mut)" }}>—</span>}
+                    </td>
                     <td>{(r.lines || []).length}</td>
                     <td className="pcp-num">{peso(reimbTotal(r))}</td>
                     <td><CompliancePill level={(r.compliance && r.compliance.level) || "PASS"} /></td>
@@ -913,7 +1014,7 @@ function ReimbursementTab({
                       </div>
                     </td>
                   </tr>
-                )) : <tr><td colSpan={11} className="pcp-empty">No reimbursement requests match your filters</td></tr>}
+                )) : <tr><td colSpan={12} className="pcp-empty">No reimbursement requests match your filters</td></tr>}
               </tbody>
             </table>
           </div>
