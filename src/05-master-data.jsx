@@ -776,9 +776,10 @@ const ROLES = {
   "Finance":    { label: "Finance Department",    tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents", "audit", "masterdata"] },
   "Custodian":  { label: "Custodian",             tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "replenishment", "history", "report", "aging", "documents"] },
   /* PCF Requestor: prepares transactions only. Full Petty Cash Requests + full
-     Liquidation (except approval); Release Ledger is view-only. No approve/
-     reject/release rights (enforced by the permission flags in 19-app.jsx). */
-  "Requestor":  { label: "PCF Requestor",         tabs: ["dashboard", "requests", "disbursements", "liquidation", "history"] },
+     Liquidation (except approval) + Reimbursement (prepare/submit, no approval);
+     Release Ledger is view-only. No approve/reject/release rights (enforced by
+     the permission flags in 19-app.jsx). */
+  "Requestor":  { label: "PCF Requestor",         tabs: ["dashboard", "requests", "disbursements", "liquidation", "reimbursement", "history"] },
 };
 const ROLE_NAMES = Object.keys(ROLES);
 
