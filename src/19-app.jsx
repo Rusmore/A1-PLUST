@@ -46,8 +46,16 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     return out;
   }, [allowedPlants, funds]);
   const inScope = useCallback((code) => allowedPlants.includes(code), [allowedPlants]);
-  /* Whoever is signed in has full edit/approve/release rights within their scope. */
-  const canEdit = true, canApprove = true, canRelease = true;
+  /* PCF Requestor prepares transactions only: full Requests + Liquidation (minus
+     approval, already gated by isLiquidationApprover), but no approve/reject/
+     release rights and Release Ledger is view-only. Every other role keeps full
+     edit/approve/release within its scope. Checked on BOTH the assigned role and
+     the role being viewed so an admin's "view as Requestor" is an honest preview. */
+  const isRequestor = (userRole || "") === "Requestor" || role === "Requestor";
+  const canEdit = true;
+  const canApprove = !isRequestor;
+  const canRelease = !isRequestor;
+  const canEditLedger = !isRequestor;
 
   /* ---- Delete rights ----
      Deleting records is reserved for the SuperAdmin role (window.PCP_USERS in
@@ -1001,6 +1009,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
             onUpdateRemarks={updateRemarks} onToggleBilled={toggleBilled} onEditDisbursement={editDisbursement}
             plantOptions={scopedPlantOptions}
             plantTitle={activePlantLabel}
+            canEdit={canEditLedger}
             canDelete={isSuperAdmin} onDelete={deleteDisbursement}
           />
         )}

@@ -135,7 +135,7 @@ const SORT_FIELDS = {
   branchCode: (d) => d.branchCode, amount: (d) => d.amount,
 };
 
-function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions, plantTitle, canDelete, onDelete }) {
+function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemarks, onToggleBilled, onEditDisbursement, plantOptions, plantTitle, canEdit = true, canDelete, onDelete }) {
   const [search, setSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState("All");
   const [statusFilter, setStatusFilter] = useState("All");
@@ -241,12 +241,18 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
                     <td className="pcp-num">{peso(d.amount)}</td>
                     <td><Badge status={d.liqStatus} /></td>
                     <td>
-                      <button className="pcp-btn pcp-btn-sm" onClick={() => onToggleBilled(d.id)} title="Toggle billed">
-                        {d.billed ? <Check size={12} color="#15803d" /> : <span style={{ color: "#9098b3" }}>—</span>}
-                      </button>
+                      {canEdit ? (
+                        <button className="pcp-btn pcp-btn-sm" onClick={() => onToggleBilled(d.id)} title="Toggle billed">
+                          {d.billed ? <Check size={12} color="#15803d" /> : <span style={{ color: "#9098b3" }}>—</span>}
+                        </button>
+                      ) : (
+                        d.billed ? <Check size={12} color="#15803d" /> : <span style={{ color: "#9098b3" }}>—</span>
+                      )}
                     </td>
                     <td style={{ minWidth: 150 }}>
-                      {editingId === d.id ? (
+                      {!canEdit ? (
+                        <span style={{ color: d.remarks ? "inherit" : "var(--text-mut)" }}>{d.remarks || "—"}</span>
+                      ) : editingId === d.id ? (
                         <input
                           className="pcp-input" autoFocus value={editValue}
                           onChange={(e) => setEditValue(e.target.value)}
@@ -262,7 +268,9 @@ function DisbursementsTab({ disbursements, liquidations, requests, onUpdateRemar
                     </td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button className="pcp-btn pcp-btn-sm" onClick={() => setEditDisb(d)} title="Edit disbursement"><Edit3 size={12} /></button>
+                        {canEdit && (
+                          <button className="pcp-btn pcp-btn-sm" onClick={() => setEditDisb(d)} title="Edit disbursement"><Edit3 size={12} /></button>
+                        )}
                         {canDelete && onDelete && (
                           <button className="pcp-btn pcp-btn-sm pcp-btn-ghost" onClick={() => onDelete(d.id)} title="Delete voucher and its liquidation (super admin)">
                             <Trash2 size={13} color="var(--brand)" />
