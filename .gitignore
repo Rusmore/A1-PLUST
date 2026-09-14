@@ -1,0 +1,14 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+
+# Local env / secrets (do not commit real keys)
+.env
+.env.*
+*.local
+
+# Node (only if a build step is ever added)
+node_modules/
+dist/
