@@ -35,7 +35,9 @@
      for free (works on GitHub Pages — no server needed):
        1. Create a free project at https://supabase.com
        2. In the Supabase SQL editor, run the SQL shown in chat / the README
-          (creates the pcp_state table + authenticated-only RLS policies).
+          (creates the pcp_state + pcp_records tables + authenticated-only RLS
+          policies). pcp_records stores each transaction in its own row so
+          concurrent users can no longer overwrite each other's records.
        3. In Authentication > Providers, turn OFF "Allow new users to sign up"
           (so only you can add accounts), then add your ~10 users under
           Authentication > Users > Add user (email + password).
@@ -49,6 +51,7 @@
   window.PCP_SUPABASE_URL = "https://cyizlubajqottkadpibk.supabase.co";
   window.PCP_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5aXpsdWJhanFvdHRrYWRwaWJrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQzNzU3MjIsImV4cCI6MjA5OTk1MTcyMn0.Ay8K-2qy0INM8OAsbBigTP2I42dl0-oc6X3s_rKBKAM";
   window.PCP_TABLE = "pcp_state";
+  window.PCP_RECORDS_TABLE = "pcp_records";
 
   /* ---- Access control (Role-Based Access Control) ----
      Each account below is matched by full email (case-insensitive). "Accounting"
@@ -86,6 +89,7 @@
      immediately; cloud calls await the client via the sbReady promise. */
   (function () {
     var TABLE = window.PCP_TABLE || "pcp_state";
+    var RECORD_TABLE = window.PCP_RECORDS_TABLE || "pcp_records";
 
     var local = {
       get: function (k) {
@@ -136,13 +140,39 @@
     };
 
     // Debounced writes so rapid state changes don't hammer the free tier.
-    var timer = null, pending = null, client = null;
-    sbReady.then(function (c) { client = c; if (c) console.info("Petty Cash: connected to shared Supabase database."); });
+    // pending is a MAP keyed by storage key, so several different keys written
+    // in the same debounce window (e.g. state + a backup + the backup index) are
+    // all flushed instead of only the last one.
+    var timer = null, pending = {}, client = null;
+    // Per-record write queue (keyed by record id) for the pcp_records table.
+    var recTimer = null, recPending = {};
+    sbReady.then(function (c) {
+      client = c;
+      if (c) { console.info("Petty Cash: connected to shared Supabase database."); flush(); flushRecords(); }
+    });
     function flush() {
-      if (!client || pending == null) return;
-      var p = pending; pending = null;
-      client.from(TABLE).upsert({ key: p.key, value: p.value, updated_at: new Date().toISOString() })
+      if (!client) return;
+      var keys = Object.keys(pending); if (!keys.length) return;
+      var rows = keys.map(function (k) { return { key: k, value: pending[k], updated_at: new Date().toISOString() }; });
+      pending = {};
+      client.from(TABLE).upsert(rows)
         .then(function (r) { if (r.error) console.warn("Cloud save failed:", r.error.message); });
+    }
+    // Flush queued per-record changes as a single batched upsert. On failure the
+    // rows are requeued so a transient error never silently drops a record.
+    function flushRecords() {
+      if (!client) return;
+      var ids = Object.keys(recPending); if (!ids.length) return;
+      var rows = ids.map(function (id) { return recPending[id]; });
+      recPending = {};
+      client.from(RECORD_TABLE).upsert(rows, { onConflict: "id" })
+        .then(function (r) {
+          if (r.error) {
+            console.warn("Cloud record save failed:", r.error.message);
+            rows.forEach(function (row) { if (!recPending[row.id]) recPending[row.id] = row; });
+            clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 4000);
+          }
+        });
     }
 
     window.storage = {
@@ -160,9 +190,40 @@
       set: function (key, value) {
         local.set(key, value); // instant local cache / offline copy
         return sbReady.then(function (c) {
-          if (c) { pending = { key: key, value: value }; clearTimeout(timer); timer = setTimeout(flush, 800); }
+          if (c) { pending[key] = value; clearTimeout(timer); timer = setTimeout(flush, 800); }
           return true;
         });
+      },
+      // Per-record cloud store (pcp_records). Each transaction lives in its own
+      // row keyed by its id, so concurrent users only touch the rows they change
+      // and can no longer overwrite each other's records.
+      records: {
+        // Reads every record row, paging past Supabase's 1000-row default limit.
+        getAll: function () {
+          return sbReady.then(function (c) {
+            if (!c) return [];
+            var all = [], page = 0, size = 1000;
+            function next() {
+              return c.from(RECORD_TABLE).select("id,collection,data,deleted").range(page * size, page * size + size - 1)
+                .then(function (res) {
+                  if (res.error) { console.warn("Cloud record load failed:", res.error.message); return all; }
+                  var batch = res.data || [];
+                  all = all.concat(batch);
+                  if (batch.length === size) { page++; return next(); }
+                  return all;
+                });
+            }
+            return next().catch(function () { return all; });
+          });
+        },
+        // Queues an array of { id, collection, data, deleted } rows for upsert.
+        put: function (rows) {
+          (rows || []).forEach(function (row) { if (row && row.id != null) recPending[row.id] = row; });
+          return sbReady.then(function (c) {
+            if (c) { clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 800); }
+            return true;
+          });
+        }
       }
     };
   })();
@@ -181,7 +242,7 @@
      browsers reload the fragments. The order of PCP_SRC_FILES matters and
      must not be rearranged (later files rely on earlier definitions). -->
 <script>
-  window.PCP_SRC_VERSION = "20260914c";
+  window.PCP_SRC_VERSION = "20260915a";
   window.PCP_SRC_FILES = [
     "src/01-imports.jsx",
     "src/02-helpers.jsx",

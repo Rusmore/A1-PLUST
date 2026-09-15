@@ -66,8 +66,40 @@ To share **one secured database** across all devices/users (works on GitHub
 Pages — no server required), configure Supabase in `index.html`:
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. Create the `pcp_state` table with authenticated-only Row Level Security
-   policies.
+2. Create the `pcp_state` and `pcp_records` tables with authenticated-only Row
+   Level Security policies. Run this in the Supabase **SQL editor**:
+
+   ```sql
+   -- Coarse whole-state blob (offline cache + recovery snapshots).
+   create table if not exists public.pcp_state (
+     key text primary key,
+     value text,
+     updated_at timestamptz not null default now()
+   );
+
+   -- Per-record store: one row per transaction so concurrent users never
+   -- overwrite each other (fixes the shared-blob data loss).
+   create table if not exists public.pcp_records (
+     id text primary key,
+     collection text not null,
+     data jsonb not null,
+     deleted boolean not null default false,
+     updated_at timestamptz not null default now()
+   );
+   create index if not exists pcp_records_collection_idx
+     on public.pcp_records (collection);
+
+   alter table public.pcp_state enable row level security;
+   alter table public.pcp_records enable row level security;
+
+   create policy "pcp_state authenticated" on public.pcp_state
+     for all to authenticated using (true) with check (true);
+   create policy "pcp_records authenticated" on public.pcp_records
+     for all to authenticated using (true) with check (true);
+   ```
+
+   On first load after deploy the app migrates the existing blob into
+   `pcp_records` automatically (idempotent), then keeps them in sync.
 3. In **Authentication → Providers**, turn off public sign-up, then add your
    users manually.
 4. Copy the Project URL and the `anon public` key into

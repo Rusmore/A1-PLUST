@@ -83,6 +83,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
 
   /* Record sign-in once per session, and sign-out via a wrapped handler. */
   const loginLoggedRef = useRef(false);
+  /* Last-synced snapshot for per-record change detection (concurrency-safe save). */
+  const syncedRef = useRef(null);
   useEffect(() => {
     if (!loaded || loginLoggedRef.current) return;
     loginLoggedRef.current = true;
@@ -108,7 +110,12 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
 
   useEffect(() => {
     (async () => {
-      const saved = await loadState();
+      /* Read the shared blob AND the per-record rows, then merge. Per-record
+         rows are authoritative (records win by id, soft-deletes drop the id), so
+         even if the coarse blob was clobbered by a concurrent user its records
+         are recovered from pcp_records — this is the fix for the multi-user
+         data loss where whole-blob "last write wins" erased others' entries. */
+      const [saved, rows] = await Promise.all([loadState(), loadRecords()]);
       /* Always keep the four master plant funds available, adding any missing. */
       const ensureFunds = (fs) => {
         const list = (fs && fs.length) ? fs.map((f) => ({ ...f })) : seedFunds();
@@ -122,7 +129,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
          a schema tag only — completed financial records must always survive an
          upgrade. (Previously a mismatch cleared every transaction, which is what
          made past records disappear after a deployment.) */
-      const migrated = migrateState(saved);
+      const migrated = mergeRecordsIntoState(migrateState(saved), rows);
 
       /* Before touching the live record, snapshot whatever we found so any
          future incident is recoverable. */
@@ -138,7 +145,8 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
         }
       } catch (e) { /* best effort */ }
 
-      setFunds(ensureFunds(source.funds));
+      const startFunds = ensureFunds(source.funds);
+      setFunds(startFunds);
       setRequests(source.requests || []);
       setDisbursements(source.disbursements || []);
       setLiquidations(source.liquidations || []);
@@ -146,17 +154,33 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       setAuditLog(source.auditLog || []);
       setDocuments(source.documents || []);
       setReimbursements(source.reimbursements || []);
+
+      /* Baseline for per-record change detection. Seed the cloud rows from
+         whatever we loaded (idempotent upsert) so a first deploy migrates the
+         existing blob into per-record rows, then only real changes are synced. */
+      const startState = {
+        funds: startFunds, requests: source.requests || [], disbursements: source.disbursements || [],
+        liquidations: source.liquidations || [], replenishments: source.replenishments || [],
+        auditLog: source.auditLog || [], documents: source.documents || [], reimbursements: source.reimbursements || [],
+      };
+      syncedRef.current = snapshotSync({});
+      if (!rows.length && txnCount(startState) > 0) {
+        try { syncRecords(diffSync(syncedRef.current, startState)); } catch (e) { /* best effort */ }
+      } else {
+        syncedRef.current = snapshotSync(startState);
+      }
       setLoaded(true);
     })();
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
-    /* Safe to persist: the load path above never empties an existing database,
-       so this write mirrors real state (including intentional edits/deletes)
-       rather than a wipe. Automatic on-load snapshots provide the rollback path
-       if a write ever needs to be undone. */
-    saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements });
+    const next = { dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements };
+    /* Coarse blob write (local cache + shared backup). Kept as a safety net. */
+    saveState(next);
+    /* Authoritative concurrency-safe write: sync only the records that actually
+       changed to their own rows, so concurrent users never overwrite each other. */
+    try { syncRecords(diffSync(syncedRef.current, next)); } catch (e) { /* best effort */ }
   }, [funds, requests, disbursements, liquidations, replenishments, auditLog, documents, reimbursements, loaded]);
 
   /* ---- Requests ---- */

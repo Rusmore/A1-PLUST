@@ -189,6 +189,96 @@ async function recoverBestState() {
   return candidates[0] || null;
 }
 
+/* ---- Per-record cloud sync (concurrency-safe) ----
+   The transaction stores that must not clobber each other when multiple users
+   are online. Each record is synced to its own row in the pcp_records table
+   (keyed by id), so two people editing different records never overwrite one
+   another — the root cause of the shared-blob data loss. */
+const SYNC_COLLECTIONS = [
+  "funds", "requests", "disbursements", "liquidations",
+  "replenishments", "auditLog", "documents", "reimbursements",
+];
+
+/* Loads every per-record row from the cloud (empty array when unavailable). */
+async function loadRecords() {
+  try {
+    if (window.storage && window.storage.records) return (await window.storage.records.getAll()) || [];
+  } catch (e) { /* offline / not configured */ }
+  return [];
+}
+
+/* Overlays per-record rows on top of a blob-derived state. Records win by id and
+   soft-deleted rows (deleted === true) drop the id, so the merged result is the
+   richest, most up-to-date view even if a blob write was clobbered. */
+function mergeRecordsIntoState(blobState, rows) {
+  const cols = {};
+  SYNC_COLLECTIONS.forEach((c) => {
+    const map = new Map();
+    (Array.isArray(blobState && blobState[c]) ? blobState[c] : []).forEach((r) => { if (r && r.id != null) map.set(r.id, r); });
+    cols[c] = map;
+  });
+  (rows || []).forEach((row) => {
+    if (!row || !row.collection || row.id == null) return;
+    const map = cols[row.collection];
+    if (!map) return;
+    if (row.deleted) map.delete(row.id);
+    else map.set(row.id, row.data);
+  });
+  const out = { dataVersion: DATA_VERSION };
+  SYNC_COLLECTIONS.forEach((c) => { out[c] = Array.from(cols[c].values()); });
+  out.auditLog = out.auditLog || [];
+  return out;
+}
+
+/* Snapshots a state into { collection: Map(id -> JSON) } for change detection. */
+function snapshotSync(state) {
+  const snap = {};
+  SYNC_COLLECTIONS.forEach((c) => {
+    const map = new Map();
+    (Array.isArray(state && state[c]) ? state[c] : []).forEach((r) => { if (r && r.id != null) map.set(r.id, JSON.stringify(r)); });
+    snap[c] = map;
+  });
+  return snap;
+}
+
+/* Diffs the current state against the last-synced snapshot and returns the rows
+   that changed: adds/edits as { deleted:false }, removals as tombstones
+   ({ deleted:true }). The snapshot is advanced in place so the next diff only
+   sees fresh changes. Edits always clear the deleted flag so a later edit wins
+   over a concurrent delete (records are preserved for audit). */
+function diffSync(snap, state) {
+  const rows = [];
+  const nowIso = new Date().toISOString();
+  SYNC_COLLECTIONS.forEach((c) => {
+    const prev = snap[c] || new Map();
+    const next = new Map();
+    (Array.isArray(state && state[c]) ? state[c] : []).forEach((r) => { if (r && r.id != null) next.set(r.id, r); });
+    next.forEach((rec, id) => {
+      const js = JSON.stringify(rec);
+      if (prev.get(id) !== js) rows.push({ id, collection: c, data: rec, deleted: false, updated_at: nowIso });
+    });
+    prev.forEach((js, id) => {
+      if (!next.has(id)) {
+        let data = {};
+        try { data = JSON.parse(js); } catch (e) { /* keep empty */ }
+        rows.push({ id, collection: c, data, deleted: true, updated_at: nowIso });
+      }
+    });
+    const advanced = new Map();
+    next.forEach((rec, id) => advanced.set(id, JSON.stringify(rec)));
+    snap[c] = advanced;
+  });
+  return rows;
+}
+
+/* Queues changed records for their per-record cloud upsert (no-op when the
+   per-record store is unavailable). */
+function syncRecords(rows) {
+  if (!rows || !rows.length) return;
+  try { if (window.storage && window.storage.records) window.storage.records.put(rows); }
+  catch (e) { /* best effort — the blob write in saveState is the fallback */ }
+}
+
 /* ---- Cross-module integrity / reconciliation ----
    Walks the Request → Release → Liquidation → Replenishment chain and reports
    completeness, orphans and duplicates. Pure function — safe to unit test. */
