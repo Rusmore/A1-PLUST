@@ -91,6 +91,62 @@
     var TABLE = window.PCP_TABLE || "pcp_state";
     var RECORD_TABLE = window.PCP_RECORDS_TABLE || "pcp_records";
 
+    // The whole-state blob key and the transaction collections inside it. The
+    // blob is written with a concurrency-safe UNION merge (below) so a stale or
+    // partial write can never drop another user's transactions — this is the
+    // safety net that stops the multi-user data loss even when the per-record
+    // table (pcp_records) is unavailable.
+    var STATE_KEY = "petty-cash-portal-state";
+    var MERGE_COLLECTIONS = [
+      "funds", "requests", "disbursements", "liquidations",
+      "replenishments", "auditLog", "documents", "reimbursements",
+    ];
+
+    // Records the fact that the per-record store is missing/unreachable so the
+    // app can warn operators to run the pcp_records SQL. Loud + idempotent.
+    window.PCP_RECORDS_UNAVAILABLE = false;
+    function noteRecordsUnavailable(err) {
+      var missing = err && (err.code === "PGRST205" ||
+        (err.message && String(err.message).indexOf("Could not find the table") !== -1));
+      if (!missing) return;
+      if (!window.PCP_RECORDS_UNAVAILABLE) {
+        window.PCP_RECORDS_UNAVAILABLE = true;
+        console.error(
+          "Petty Cash: the 'pcp_records' table is MISSING in Supabase. The app is " +
+          "running on the shared blob only, which is NOT concurrency-safe. Create the " +
+          "table by running the SQL in README.md (Data Storage & Login) — no existing " +
+          "data will be touched. Until then a union-merge safety net protects saves."
+        );
+      }
+    }
+
+    // Union two whole-state JSON blobs, keying transaction collections by id so
+    // the result is the SUPERSET of both (local wins on identical ids). Deletes
+    // are still honoured on load via the per-record tombstones (records win),
+    // so this never resurrects an intentionally deleted record once pcp_records
+    // exists — but it does guarantee no transaction is ever lost to a race.
+    function mergeStateValues(remoteStr, localStr) {
+      var remote, local;
+      try { local = JSON.parse(localStr); } catch (e) { return localStr; }
+      if (!local || typeof local !== "object") return localStr;
+      try { remote = JSON.parse(remoteStr); } catch (e) { remote = null; }
+      if (!remote || typeof remote !== "object") return localStr;
+      var out = Object.assign({}, remote, local); // scalar fields: local wins
+      MERGE_COLLECTIONS.forEach(function (c) {
+        var byId = {}, order = [];
+        function add(list) {
+          (Array.isArray(list) ? list : []).forEach(function (r) {
+            if (!r || r.id == null) return;
+            if (!(r.id in byId)) order.push(r.id);
+            byId[r.id] = r;
+          });
+        }
+        add(remote[c]); add(local[c]); // local overrides remote on same id
+        out[c] = order.map(function (id) { return byId[id]; });
+      });
+      return JSON.stringify(out);
+    }
+
     var local = {
       get: function (k) {
         try { var v = localStorage.getItem(k); return v == null ? null : { value: v }; }
@@ -153,10 +209,30 @@
     function flush() {
       if (!client) return;
       var keys = Object.keys(pending); if (!keys.length) return;
-      var rows = keys.map(function (k) { return { key: k, value: pending[k], updated_at: new Date().toISOString() }; });
-      pending = {};
-      client.from(TABLE).upsert(rows)
-        .then(function (r) { if (r.error) console.warn("Cloud save failed:", r.error.message); });
+      var snapshot = pending; pending = {};
+      keys.forEach(function (k) {
+        var value = snapshot[k];
+        if (k !== STATE_KEY) {
+          // Backups / index / misc keys are immutable snapshots — plain upsert.
+          client.from(TABLE).upsert([{ key: k, value: value, updated_at: new Date().toISOString() }])
+            .then(function (r) { if (r && r.error) console.warn("Cloud save failed:", r.error.message); });
+          return;
+        }
+        // Whole-state blob: read the current cloud copy and UNION transaction
+        // records by id before writing, so a stale/partial save can never wipe
+        // another user's transactions (the root cause of the system-wide loss).
+        client.from(TABLE).select("value").eq("key", k).maybeSingle()
+          .then(function (res) {
+            var merged = (res && !res.error && res.data && res.data.value != null)
+              ? mergeStateValues(res.data.value, value) : value;
+            return client.from(TABLE).upsert([{ key: k, value: merged, updated_at: new Date().toISOString() }]);
+          })
+          .then(function (r) { if (r && r.error) console.warn("Cloud save failed:", r.error.message); })
+          .catch(function () {
+            // On any read/merge failure, still persist the local copy directly.
+            client.from(TABLE).upsert([{ key: k, value: value, updated_at: new Date().toISOString() }]);
+          });
+      });
     }
     // Flush queued per-record changes as a single batched upsert. On failure the
     // rows are requeued so a transient error never silently drops a record.
@@ -168,9 +244,14 @@
       client.from(RECORD_TABLE).upsert(rows, { onConflict: "id" })
         .then(function (r) {
           if (r.error) {
+            noteRecordsUnavailable(r.error);
             console.warn("Cloud record save failed:", r.error.message);
-            rows.forEach(function (row) { if (!recPending[row.id]) recPending[row.id] = row; });
-            clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 4000);
+            // Don't requeue forever when the table is missing — the union-merged
+            // blob is already persisting the data safely in that case.
+            if (!window.PCP_RECORDS_UNAVAILABLE) {
+              rows.forEach(function (row) { if (!recPending[row.id]) recPending[row.id] = row; });
+              clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 4000);
+            }
           }
         });
     }
@@ -206,7 +287,7 @@
             function next() {
               return c.from(RECORD_TABLE).select("id,collection,data,deleted").range(page * size, page * size + size - 1)
                 .then(function (res) {
-                  if (res.error) { console.warn("Cloud record load failed:", res.error.message); return all; }
+                  if (res.error) { noteRecordsUnavailable(res.error); console.warn("Cloud record load failed:", res.error.message); return all; }
                   var batch = res.data || [];
                   all = all.concat(batch);
                   if (batch.length === size) { page++; return next(); }
@@ -242,7 +323,7 @@
      browsers reload the fragments. The order of PCP_SRC_FILES matters and
      must not be rearranged (later files rely on earlier definitions). -->
 <script>
-  window.PCP_SRC_VERSION = "20260915a";
+  window.PCP_SRC_VERSION = "20260916a";
   window.PCP_SRC_FILES = [
     "src/01-imports.jsx",
     "src/02-helpers.jsx",

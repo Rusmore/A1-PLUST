@@ -20,6 +20,9 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
   const [showEditBalances, setShowEditBalances] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
   const [saveTick, setSaveTick] = useState(0);
+  /* True when the concurrency-safe per-record store (pcp_records) is missing in
+     the cloud database. Surfaces a banner so an admin runs the setup SQL. */
+  const [recordsUnavailable, setRecordsUnavailable] = useState(false);
 
   /* Plant-level access scope for this user (list of allowed branch codes).
      For management (userPlants === "ALL") the scope is derived LIVE from the
@@ -169,6 +172,7 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       } else {
         syncedRef.current = snapshotSync(startState);
       }
+      setRecordsUnavailable(!!window.PCP_RECORDS_UNAVAILABLE);
       setLoaded(true);
     })();
   }, []);
@@ -984,6 +988,14 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
       <style>{CSS}</style>
       <Sidebar tab={tab} setTab={setTab} role={role} navGroups={navGroups} userEmail={userEmail} userName={userName} onSignOut={handleSignOut} onChangePassword={() => setShowChangePw(true)} />
       <div className="pcp-main">
+        {recordsUnavailable && isAdmin && (
+          <div style={{ background: "#8a1020", color: "#fff", padding: "8px 16px", fontSize: 12.5, lineHeight: 1.5 }}>
+            <b>Database setup incomplete:</b> the concurrency-safe <code>pcp_records</code> table is missing,
+            so saves fall back to a shared blob. A safety net is preventing data loss, but please run the
+            setup SQL (see README → Data Storage &amp; Login) in Supabase to fully restore multi-user safety.
+            No existing data will be affected.
+          </div>
+        )}
         {activeModule === "dashboard" && (
           activePlant && activeBranch ? (
             <>
