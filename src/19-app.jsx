@@ -98,18 +98,35 @@ export default function App({ userEmail, userName, onSignOut, userRole, isAdmin,
     }]);
   }, [loaded]); // eslint-disable-line
 
-  const handleSignOut = useCallback(() => {
-    setAuditLog((log) => {
-      const next = [...log, {
-        id: uid("aud"), ts: new Date().toISOString().slice(0, 19),
-        user: userName || (userEmail || "User"), action: "Signed Out",
-        entity: userEmail || "—", remarks: "",
-      }];
-      try { saveState({ dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations, replenishments, auditLog: next, documents, reimbursements }); } catch (e) {}
-      return next;
-    });
+  /* Signing out MUST NOT outrun the pending save. saveState/syncRecords only
+     queue behind an 800ms debounce, but onSignOut() invalidates the Supabase
+     session immediately — so the queued write used to land without a valid
+     token, get rejected by RLS, and vanish. The local copy still showed it to
+     this browser, which is why the loss looked random and only ever affected
+     everyone ELSE. Flush to the cloud first, then drop the session. */
+  const handleSignOut = useCallback(async () => {
+    const nextAudit = [...auditLog, {
+      id: uid("aud"), ts: new Date().toISOString().slice(0, 19),
+      user: userName || (userEmail || "User"), action: "Signed Out",
+      entity: userEmail || "—", remarks: "",
+    }];
+    setAuditLog(nextAudit);
+    const next = {
+      dataVersion: DATA_VERSION, funds, requests, disbursements, liquidations,
+      replenishments, auditLog: nextAudit, documents, reimbursements,
+    };
+    try { saveState(next); } catch (e) { /* local copy is already written */ }
+    /* Guarded separately: syncedRef is null until the initial load finishes, and
+       a throw here must not skip the flush below. */
+    try {
+      if (syncedRef.current) syncRecords(diffSync(syncedRef.current, next));
+    } catch (e) { /* best effort — the blob write above still carries the data */ }
+    try {
+      if (window.storage && window.storage.flushNow) await window.storage.flushNow();
+    } catch (e) { /* sign out regardless; nothing more we can do here */ }
     if (onSignOut) onSignOut();
-  }, [onSignOut, userName, userEmail, funds, requests, disbursements, liquidations, replenishments, reimbursements]);
+  }, [onSignOut, userName, userEmail, funds, requests, disbursements, liquidations,
+      replenishments, auditLog, documents, reimbursements]);
 
   useEffect(() => {
     (async () => {

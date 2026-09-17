@@ -81,6 +81,23 @@ function txnCount(state) {
   return TXN_KEYS.reduce((n, k) => n + (Array.isArray(state[k]) ? state[k].length : 0), 0);
 }
 
+/* ---- File payload stripping ----
+   Uploaded files are stored as base64 data URLs INSIDE their transaction
+   record: liquidations and reimbursements keep them in `attachments[].data`,
+   PCF documents in `dataUrl`. A single scanned receipt is multiple megabytes,
+   which is why a handful of rows accounts for almost all of the database.
+   Returns a copy with the bytes blanked, leaving every other field (name, size,
+   type, receipt no., amount, approval history) untouched. */
+function stripFileBytes(rec) {
+  if (!rec || typeof rec !== "object") return rec;
+  let out = rec;
+  if (Array.isArray(rec.attachments) && rec.attachments.some((a) => a && a.data)) {
+    out = { ...out, attachments: rec.attachments.map((a) => (a && a.data ? { ...a, data: "" } : a)) };
+  }
+  if (out.dataUrl) out = { ...out, dataUrl: "" };
+  return out;
+}
+
 async function loadState() {
   try {
     const res = await window.storage.get(STORAGE_KEY, false);
@@ -261,6 +278,11 @@ function diffSync(snap, state) {
       if (!next.has(id)) {
         let data = {};
         try { data = JSON.parse(js); } catch (e) { /* keep empty */ }
+        /* Keep the deleted record's fields for audit, but drop the base64 file
+           payloads. Tombstones are never pruned, so a deleted receipt would
+           otherwise occupy the database forever; the metadata an audit actually
+           needs (name, size, who uploaded it, when) is all retained. */
+        data = stripFileBytes(data);
         rows.push({ id, collection: c, data, deleted: true, updated_at: nowIso });
       }
     });

@@ -90,6 +90,9 @@
   (function () {
     var TABLE = window.PCP_TABLE || "pcp_state";
     var RECORD_TABLE = window.PCP_RECORDS_TABLE || "pcp_records";
+    // Known synchronously, unlike the client itself — lets set()/put() queue
+    // writes immediately instead of waiting a microtask for sbReady.
+    var CLOUD = !!(window.PCP_SUPABASE_URL && window.PCP_SUPABASE_ANON_KEY);
 
     // The whole-state blob key and the transaction collections inside it. The
     // blob is written with a concurrency-safe UNION merge (below) so a stale or
@@ -147,6 +150,46 @@
       return JSON.stringify(out);
     }
 
+    // Collections whose records embed uploaded files as base64 data URLs:
+    // liquidations/reimbursements in attachments[].data, documents in dataUrl.
+    var PAYLOAD_COLLECTIONS = ["liquidations", "reimbursements", "documents"];
+
+    // Strips file bytes out of a whole-state JSON string.
+    // WHY: the bytes are already stored per-row in pcp_records, which is read
+    // once per load. The whole-state blob, by contrast, is re-read on EVERY save
+    // to do the union merge above, and copied wholesale into all 12 rolling
+    // backups — so a single 4 MB receipt in the blob turned into hundreds of
+    // megabytes of egress and a database full of duplicate copies.
+    // Bytes are restored on load from pcp_records (records win by id), so the
+    // app is unaffected. Trade-off: a blob-only recovery (pcp_records missing)
+    // brings back every transaction and all receipt METADATA but not the file
+    // bytes. Those belong in Supabase Storage — see README.
+    function stripPayloadsJSON(str) {
+      var s;
+      try { s = JSON.parse(str); } catch (e) { return str; }
+      if (!s || typeof s !== "object") return str;
+      var touched = false;
+      PAYLOAD_COLLECTIONS.forEach(function (c) {
+        if (!Array.isArray(s[c])) return;
+        s[c] = s[c].map(function (r) {
+          if (!r || typeof r !== "object") return r;
+          var out = r;
+          if (Array.isArray(r.attachments) && r.attachments.some(function (a) { return a && a.data; })) {
+            touched = true;
+            out = Object.assign({}, out, {
+              attachments: r.attachments.map(function (a) {
+                return (a && a.data) ? Object.assign({}, a, { data: "" }) : a;
+              })
+            });
+          }
+          if (out.dataUrl) { touched = true; out = Object.assign({}, out, { dataUrl: "" }); }
+          return out;
+        });
+      });
+      if (!touched) return str;
+      try { return JSON.stringify(s); } catch (e) { return str; }
+    }
+
     var local = {
       get: function (k) {
         try { var v = localStorage.getItem(k); return v == null ? null : { value: v }; }
@@ -202,26 +245,35 @@
     var timer = null, pending = {}, client = null;
     // Per-record write queue (keyed by record id) for the pcp_records table.
     var recTimer = null, recPending = {};
+    // Cached access token, kept fresh by onAuthStateChange. The unload-time
+    // keepalive write below needs it synchronously and cannot await getSession().
+    var authToken = null;
     sbReady.then(function (c) {
       client = c;
-      if (c) { console.info("Petty Cash: connected to shared Supabase database."); flush(); flushRecords(); }
+      if (!c) return;
+      console.info("Petty Cash: connected to shared Supabase database.");
+      c.auth.getSession().then(function (r) {
+        authToken = (r && r.data && r.data.session) ? r.data.session.access_token : null;
+      }).catch(function () {});
+      c.auth.onAuthStateChange(function (_e, session) { authToken = session ? session.access_token : null; });
+      flush(); flushRecords();
     });
+    // flush/flushRecords return promises so flushNow() can await them.
     function flush() {
-      if (!client) return;
-      var keys = Object.keys(pending); if (!keys.length) return;
+      if (!client) return Promise.resolve();
+      var keys = Object.keys(pending); if (!keys.length) return Promise.resolve();
       var snapshot = pending; pending = {};
-      keys.forEach(function (k) {
+      return Promise.all(keys.map(function (k) {
         var value = snapshot[k];
         if (k !== STATE_KEY) {
           // Backups / index / misc keys are immutable snapshots — plain upsert.
-          client.from(TABLE).upsert([{ key: k, value: value, updated_at: new Date().toISOString() }])
+          return client.from(TABLE).upsert([{ key: k, value: value, updated_at: new Date().toISOString() }])
             .then(function (r) { if (r && r.error) console.warn("Cloud save failed:", r.error.message); });
-          return;
         }
         // Whole-state blob: read the current cloud copy and UNION transaction
         // records by id before writing, so a stale/partial save can never wipe
         // another user's transactions (the root cause of the system-wide loss).
-        client.from(TABLE).select("value").eq("key", k).maybeSingle()
+        return client.from(TABLE).select("value").eq("key", k).maybeSingle()
           .then(function (res) {
             var merged = (res && !res.error && res.data && res.data.value != null)
               ? mergeStateValues(res.data.value, value) : value;
@@ -230,18 +282,18 @@
           .then(function (r) { if (r && r.error) console.warn("Cloud save failed:", r.error.message); })
           .catch(function () {
             // On any read/merge failure, still persist the local copy directly.
-            client.from(TABLE).upsert([{ key: k, value: value, updated_at: new Date().toISOString() }]);
+            return client.from(TABLE).upsert([{ key: k, value: value, updated_at: new Date().toISOString() }]);
           });
-      });
+      }));
     }
     // Flush queued per-record changes as a single batched upsert. On failure the
     // rows are requeued so a transient error never silently drops a record.
     function flushRecords() {
-      if (!client) return;
-      var ids = Object.keys(recPending); if (!ids.length) return;
+      if (!client) return Promise.resolve();
+      var ids = Object.keys(recPending); if (!ids.length) return Promise.resolve();
       var rows = ids.map(function (id) { return recPending[id]; });
       recPending = {};
-      client.from(RECORD_TABLE).upsert(rows, { onConflict: "id" })
+      return client.from(RECORD_TABLE).upsert(rows, { onConflict: "id" })
         .then(function (r) {
           if (r.error) {
             noteRecordsUnavailable(r.error);
@@ -256,6 +308,56 @@
         });
     }
 
+    // Writes the queued per-record rows with fetch({ keepalive: true }), which
+    // the browser completes even after the tab is closed. The Supabase client
+    // cannot set keepalive, so this calls the REST endpoint directly.
+    // Only pcp_records is written here: it is keyed per row, so it needs no
+    // read-merge round trip and can never clobber another user's work.
+    function keepaliveFlushRecords() {
+      var url = window.PCP_SUPABASE_URL, key = window.PCP_SUPABASE_ANON_KEY;
+      var ids = Object.keys(recPending);
+      if (!url || !key || !authToken || !ids.length) return;
+      var rows = ids.map(function (id) { return recPending[id]; });
+      // recPending is deliberately NOT cleared: a keepalive request gives no
+      // usable response, so the rows stay queued and the normal debounced flush
+      // re-upserts them if the page survives. Upserts are idempotent by id, so a
+      // redundant write costs nothing — losing a record costs a lot.
+      try {
+        fetch(url.replace(/\/+$/, "") + "/rest/v1/" + RECORD_TABLE + "?on_conflict=id", {
+          method: "POST",
+          headers: {
+            "apikey": key,
+            "Authorization": "Bearer " + authToken,
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=minimal"
+          },
+          body: JSON.stringify(rows),
+          keepalive: true
+        }).catch(function () {});
+      } catch (e) { /* best effort — localStorage still holds the copy */ }
+      clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 1500);
+    }
+
+    // Fires queued writes immediately instead of waiting out the debounce.
+    // Awaited before sign-out so the session is still valid when the rows land:
+    // previously signOut() invalidated the token mid-debounce, RLS rejected the
+    // write, and the user's last entries never left the browser. Waits on
+    // sbReady so a flush requested before the client connected still lands.
+    function flushNow() {
+      clearTimeout(timer); clearTimeout(recTimer);
+      return sbReady
+        .then(function () { return Promise.all([flush(), flushRecords()]); })
+        .catch(function () {});
+    }
+
+    // A closing or backgrounded tab gets no debounce grace, so flush on the way
+    // out. pagehide covers close/navigate; visibilitychange covers mobile
+    // task-switching, often the only event a phone fires before discarding the page.
+    window.addEventListener("pagehide", keepaliveFlushRecords);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") keepaliveFlushRecords();
+    });
+
     window.storage = {
       get: function (key) {
         return sbReady.then(function (c) {
@@ -269,41 +371,61 @@
         });
       },
       set: function (key, value) {
-        local.set(key, value); // instant local cache / offline copy
-        return sbReady.then(function (c) {
-          if (c) { pending[key] = value; clearTimeout(timer); timer = setTimeout(flush, 800); }
-          return true;
-        });
+        // The LOCAL copy keeps the file bytes: it is the offline cache, and in
+        // local-only mode (no Supabase) it is the only store there is.
+        local.set(key, value);
+        // Queue SYNCHRONOUSLY. This used to happen inside sbReady.then(), which
+        // made it a microtask — so a flushNow() on the very next line saw an
+        // empty queue and skipped the write entirely. flush() already no-ops
+        // until the client exists, and the sbReady handler calls flush() once it
+        // does, so anything queued before connect is still written.
+        // The CLOUD copy drops the bytes (see stripPayloadsJSON).
+        if (CLOUD) { pending[key] = stripPayloadsJSON(value); clearTimeout(timer); timer = setTimeout(flush, 800); }
+        return Promise.resolve(true);
       },
+      // Forces the debounced queues out now, resolving once they land. Await
+      // this before anything that ends the session or tears down the page.
+      flushNow: flushNow,
       // Per-record cloud store (pcp_records). Each transaction lives in its own
       // row keyed by its id, so concurrent users only touch the rows they change
       // and can no longer overwrite each other's records.
       records: {
         // Reads every record row, paging past Supabase's 1000-row default limit.
+        // .order("id") is REQUIRED: Postgres guarantees no row order without an
+        // ORDER BY, and an UPDATE relocates the row in the heap — so paging with
+        // .range() alone silently repeated some rows and skipped others once the
+        // table passed 1000 rows, and the skipped records simply never loaded.
+        // Tombstones are fetched separately WITHOUT the data column, since
+        // mergeRecordsIntoState only needs their id in order to drop the record.
+        // Otherwise a deleted document's base64 payload downloads on every load.
         getAll: function () {
           return sbReady.then(function (c) {
             if (!c) return [];
-            var all = [], page = 0, size = 1000;
-            function next() {
-              return c.from(RECORD_TABLE).select("id,collection,data,deleted").range(page * size, page * size + size - 1)
+            var all = [], size = 1000;
+            function page(cols, isDeleted, from) {
+              return c.from(RECORD_TABLE).select(cols)
+                .eq("deleted", isDeleted).order("id", { ascending: true })
+                .range(from, from + size - 1)
                 .then(function (res) {
-                  if (res.error) { noteRecordsUnavailable(res.error); console.warn("Cloud record load failed:", res.error.message); return all; }
+                  if (res.error) { noteRecordsUnavailable(res.error); console.warn("Cloud record load failed:", res.error.message); return null; }
                   var batch = res.data || [];
-                  all = all.concat(batch);
-                  if (batch.length === size) { page++; return next(); }
-                  return all;
+                  batch.forEach(function (r) { r.deleted = isDeleted; all.push(r); });
+                  if (batch.length < size) return null;
+                  return page(cols, isDeleted, from + size);
                 });
             }
-            return next().catch(function () { return all; });
+            return page("id,collection,data", false, 0)
+              .then(function () { return page("id,collection", true, 0); })
+              .then(function () { return all; })
+              .catch(function () { return all; });
           });
         },
         // Queues an array of { id, collection, data, deleted } rows for upsert.
+        // Queued synchronously so an immediately-following flushNow() sees them.
         put: function (rows) {
           (rows || []).forEach(function (row) { if (row && row.id != null) recPending[row.id] = row; });
-          return sbReady.then(function (c) {
-            if (c) { clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 800); }
-            return true;
-          });
+          if (CLOUD) { clearTimeout(recTimer); recTimer = setTimeout(flushRecords, 800); }
+          return Promise.resolve(true);
         }
       }
     };
@@ -323,7 +445,7 @@
      browsers reload the fragments. The order of PCP_SRC_FILES matters and
      must not be rearranged (later files rely on earlier definitions). -->
 <script>
-  window.PCP_SRC_VERSION = "20260916a";
+  window.PCP_SRC_VERSION = "20260916b";
   window.PCP_SRC_FILES = [
     "src/01-imports.jsx",
     "src/02-helpers.jsx",
